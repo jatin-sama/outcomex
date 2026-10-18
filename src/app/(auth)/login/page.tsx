@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -12,67 +12,101 @@ import {
   AlertCircle,
   CheckCircle2,
   Database,
-  Sparkles,
-  UserCheck,
+  Building2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [role, setRole] = useState<"teacher" | "hod" | "department_admin">("teacher");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [department, setDepartment] = useState("CSE");
-  const [email, setEmail] = useState("teacher.cse@pce.edu.in");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [academicRole, setAcademicRole] = useState<"teacher" | "hod">("teacher");
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  // If already authenticated with Supabase, redirect to dashboard
+  useEffect(() => {
+    try {
+      const supabase = createClient();
+      supabase.auth.getSession().then(({ data }) => {
+        if (data?.session?.user) {
+          router.replace("/");
+        }
+      });
+    } catch {}
+  }, [router]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErrorMessage(null);
     setSuccessMessage(null);
 
-    try {
-      const supabase = createClient();
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+    const supabase = createClient();
 
-      if (error) {
-        if (error.message?.includes("API key") || error.message?.includes("apikey")) {
-          setErrorMessage(
-            "Supabase anon key missing: The NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local is still a placeholder. Please paste your anon key from Supabase Dashboard (Settings ⚙️ → API), or use the 1-Click Fast Access buttons above!"
-          );
-        } else {
-          setErrorMessage(error.message || "Invalid credentials. Please verify your email and password.");
+    try {
+      if (authMode === "signin") {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+
+        if (error) {
+          setErrorMessage(error.message);
+        } else if (data?.user) {
+          const roleLabel =
+            (data.user.user_metadata?.role as string) ||
+            (academicRole === "hod" ? "Department Admin / HOD" : "Teacher / Course Coordinator");
+
+          if (typeof window !== "undefined") {
+            localStorage.setItem("outcomeX_user", data.user.email || email.trim());
+            localStorage.setItem("outcomeX_role", roleLabel);
+          }
+
+          setSuccessMessage("Authentication verified. Entering OutcomeX...");
+          setTimeout(() => {
+            router.push("/");
+          }, 400);
         }
       } else {
-        const roleLabel = role === "hod" ? "Department Admin / HOD" : "Teacher / Course Coordinator";
-        localStorage.setItem("outcomeX_user", email);
-        localStorage.setItem("outcomeX_role", roleLabel);
-        setSuccessMessage("Authentication successful! Redirecting to OutcomeX...");
-        setTimeout(() => {
-          router.push("/");
-        }, 600);
+        // Sign up flow
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: {
+            data: {
+              full_name: fullName.trim(),
+              department,
+              role: academicRole === "hod" ? "Department Admin / HOD" : "Teacher / Course Coordinator",
+            },
+          },
+        });
+
+        if (error) {
+          setErrorMessage(error.message);
+        } else if (data?.user) {
+          if (data.session) {
+            setSuccessMessage("Account created successfully! Logging you in...");
+            setTimeout(() => {
+              router.push("/");
+            }, 500);
+          } else {
+            setSuccessMessage(
+              "Account registered. Please verify your email or sign in with your credentials."
+            );
+            setAuthMode("signin");
+          }
+        }
       }
     } catch (err: any) {
-      setErrorMessage(err.message || "An unexpected error occurred.");
+      setErrorMessage(err.message || "An unexpected error occurred during authentication.");
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleQuickDemoLogin = (demoRole: "teacher" | "hod") => {
-    const demoEmail = demoRole === "teacher" ? "teacher.cse@pce.edu.in" : "hod.cse@pce.edu.in";
-    const roleLabel = demoRole === "teacher" ? "Teacher / Course Coordinator" : "Department Admin / HOD";
-    localStorage.setItem("outcomeX_user", demoEmail);
-    localStorage.setItem("outcomeX_role", roleLabel);
-    setSuccessMessage(`Authenticated as ${roleLabel}! Entering workspace...`);
-    setTimeout(() => {
-      window.location.href = "/";
-    }, 500);
   };
 
   return (
@@ -95,78 +129,101 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Quick Staging / Faculty 1-Click Access Card */}
-        <div className="rounded-2xl border border-sky-200 dark:border-sky-900/60 bg-sky-50/70 dark:bg-sky-950/40 p-4 shadow-xs">
-          <div className="flex items-center gap-2 mb-2">
-            <Sparkles className="h-4 w-4 text-sky-600 dark:text-sky-400" />
-            <h3 className="text-xs font-bold uppercase tracking-wider text-sky-800 dark:text-sky-300">
-              1-Click Fast Access (Faculty & HOD)
-            </h3>
-          </div>
-          <p className="text-xs text-sky-700/90 dark:text-sky-300/80 mb-3">
-            Select your assigned faculty profile to enter the OBE calculation workspace:
-          </p>
-          <div className="grid grid-cols-2 gap-2">
+        {/* Authentication Card */}
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 sm:p-8 shadow-sm space-y-6">
+          {/* Sign In vs Register Tabs */}
+          <div className="flex border-b border-slate-100 dark:border-slate-800 pb-2">
             <button
               type="button"
-              onClick={() => handleQuickDemoLogin("teacher")}
-              className="flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-slate-900 border border-sky-300 dark:border-sky-800 py-2 px-3 text-xs font-bold text-slate-800 dark:text-slate-200 hover:bg-sky-100 dark:hover:bg-sky-900/50 transition-colors shadow-xs"
+              onClick={() => {
+                setAuthMode("signin");
+                setErrorMessage(null);
+                setSuccessMessage(null);
+              }}
+              className={`flex-1 py-2 text-xs font-bold text-center border-b-2 transition-all ${
+                authMode === "signin"
+                  ? "border-sky-600 text-sky-600 dark:text-sky-400"
+                  : "border-transparent text-slate-400 hover:text-slate-600"
+              }`}
             >
-              <UserCheck className="h-3.5 w-3.5 text-sky-600" />
-              <span>Teacher (CSE)</span>
+              Faculty Sign In
             </button>
             <button
               type="button"
-              onClick={() => handleQuickDemoLogin("hod")}
-              className="flex items-center justify-center gap-2 rounded-xl bg-white dark:bg-slate-900 border border-sky-300 dark:border-sky-800 py-2 px-3 text-xs font-bold text-slate-800 dark:text-slate-200 hover:bg-sky-100 dark:hover:bg-sky-900/50 transition-colors shadow-xs"
+              onClick={() => {
+                setAuthMode("signup");
+                setErrorMessage(null);
+                setSuccessMessage(null);
+              }}
+              className={`flex-1 py-2 text-xs font-bold text-center border-b-2 transition-all ${
+                authMode === "signup"
+                  ? "border-sky-600 text-sky-600 dark:text-sky-400"
+                  : "border-transparent text-slate-400 hover:text-slate-600"
+              }`}
             >
-              <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
-              <span>HOD / Admin</span>
+              Register Faculty Account
             </button>
           </div>
-        </div>
 
-        {/* Supabase Password Sign In Form */}
-        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 sm:p-7 shadow-sm space-y-5">
-          {/* Role Tabs */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">
-              Sign In With Password
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                { id: "teacher", label: "Teacher / Course Coordinator", email: "teacher.cse@pce.edu.in" },
-                { id: "hod", label: "Department Admin / HOD", email: "hod.cse@pce.edu.in" },
-              ].map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => {
-                    setRole(r.id as any);
-                    setEmail(r.email);
-                  }}
-                  className={`rounded-xl py-2 px-3 text-xs font-semibold transition-all border text-center ${
-                    role === r.id
-                      ? "bg-sky-600 text-white border-sky-600 shadow-xs"
-                      : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100"
-                  }`}
-                >
-                  {r.id === "teacher" ? "Teacher" : "HOD / Admin"}
-                </button>
-              ))}
-            </div>
-          </div>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* If Sign Up, collect Full Name and Academic Role */}
+            {authMode === "signup" && (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Faculty Full Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Prof. / Dr. Full Name"
+                    className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
 
-          <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                    Academic Designation
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAcademicRole("teacher")}
+                      className={`rounded-xl py-2 px-3 text-xs font-semibold border ${
+                        academicRole === "teacher"
+                          ? "bg-sky-600 text-white border-sky-600 shadow-xs"
+                          : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400"
+                      }`}
+                    >
+                      Teacher / Coordinator
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAcademicRole("hod")}
+                      className={`rounded-xl py-2 px-3 text-xs font-semibold border ${
+                        academicRole === "hod"
+                          ? "bg-sky-600 text-white border-sky-600 shadow-xs"
+                          : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400"
+                      }`}
+                    >
+                      HOD / Dept Admin
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
             {/* Department */}
             <div>
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Department
+                Engineering Department
               </label>
               <select
                 value={department}
                 onChange={(e) => setDepartment(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
               >
                 <option value="CSE">Computer Science & Engineering (CSE)</option>
                 <option value="AIDS">Artificial Intelligence & Data Science (AIDS)</option>
@@ -179,7 +236,7 @@ export default function LoginPage() {
             {/* Email */}
             <div>
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Faculty Email ID
+                Institutional Email ID
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -191,7 +248,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="name.dept@pce.edu.in"
-                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pl-10 pr-3.5 py-2 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pl-10 pr-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>
             </div>
@@ -207,52 +264,45 @@ export default function LoginPage() {
                 </div>
                 <input
                   type="password"
+                  required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password"
-                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pl-10 pr-3.5 py-2 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  placeholder="••••••••"
+                  minLength={6}
+                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pl-10 pr-3.5 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>
             </div>
 
             {errorMessage && (
-              <div className="rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 p-3 flex items-start gap-2 text-xs text-rose-700 dark:text-rose-300">
+              <div className="rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 p-3.5 flex items-start gap-2.5 text-xs text-rose-700 dark:text-rose-300">
                 <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-semibold">{errorMessage}</p>
-                  <p className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">
-                    Tip: Use the 1-Click Fast Access button above to test the OBE workspace immediately.
-                  </p>
-                </div>
+                <span className="font-medium">{errorMessage}</span>
               </div>
             )}
 
             {successMessage && (
-              <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 p-3 flex items-start gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+              <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 p-3.5 flex items-start gap-2.5 text-xs text-emerald-700 dark:text-emerald-300">
                 <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
-                <span>{successMessage}</span>
+                <span className="font-medium">{successMessage}</span>
               </div>
             )}
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 py-2.5 text-sm font-semibold text-white shadow-md shadow-sky-600/25 transition-all disabled:opacity-60"
+              className="w-full flex items-center justify-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 py-3 text-sm font-semibold text-white shadow-md shadow-sky-600/25 transition-all disabled:opacity-60 cursor-pointer"
             >
-              <span>{loading ? "Authenticating..." : "Sign In with Password"}</span>
+              <span>{loading ? "Authenticating..." : authMode === "signin" ? "Sign In to Department Portal" : "Register Faculty Account"}</span>
               <ArrowRight className="h-4 w-4" />
             </button>
           </form>
 
-          {/* Database & Security Notice */}
-          <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 space-y-1.5 text-center">
+          {/* Security & Access Policy Notice */}
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 text-center">
             <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-center gap-1.5">
-              <Database className="h-3.5 w-3.5 text-sky-500" />
-              <span>Project: twuvuovkznrksymbobav.supabase.co</span>
-            </p>
-            <p className="text-[10px] text-slate-400 flex items-center justify-center gap-1.5">
               <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-              <span>19 Database Tables with Row Level Security (RLS) Enforced</span>
+              <span>Row Level Security (RLS) & Department Boundaries Enforced</span>
             </p>
           </div>
         </div>

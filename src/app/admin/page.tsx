@@ -537,7 +537,7 @@ export default function AdminPage() {
                         {INITIAL_COURSE.semester} • {INITIAL_COURSE.year_of_study}
                       </td>
                       <td className="py-3 text-slate-700 dark:text-slate-300">
-                        teacher.cse@pce.edu.in
+                        Course Coordinator (Faculty)
                       </td>
                       <td className="py-3 font-semibold text-slate-900 dark:text-white">
                         81 Students

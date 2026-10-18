@@ -169,7 +169,7 @@ export async function POST(
       const { logAuditEvent } = await import("@/lib/audit/auditLogger");
       logAuditEvent({
         offering_id: id,
-        user_email: "teacher.cse@pce.edu.in",
+        user_email: request.headers.get("x-user-email") || "faculty@pce.edu.in",
         action: "MARKS_IMPORTED",
         resource_type: "student_marks",
         resource_id: `imp-${Date.now()}`,

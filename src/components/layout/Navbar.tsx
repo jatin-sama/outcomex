@@ -24,15 +24,15 @@ interface NavbarProps {
 }
 
 export function Navbar({
-  userEmail: initialEmail = "teacher.cse@pce.edu.in",
+  userEmail: initialEmail,
   userRole: initialRole = "Teacher",
   departmentCode = "CSE",
 }: NavbarProps) {
   const router = useRouter();
-  const [currentUser, setCurrentUser] = useState<string | null>(initialEmail);
+  const [currentUser, setCurrentUser] = useState<string | null>(initialEmail || null);
   const [currentRole, setCurrentRole] = useState<string>(initialRole);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<"supabase" | "local">("local");
+  const [authMode, setAuthMode] = useState<"supabase" | "local">("supabase");
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -112,14 +112,6 @@ export function Navbar({
     router.push("/login");
   };
 
-  const handleRoleSwitch = (newRole: string, newEmail: string) => {
-    setCurrentRole(newRole);
-    setCurrentUser(newEmail);
-    localStorage.setItem("outcomeX_role", newRole);
-    localStorage.setItem("outcomeX_user", newEmail);
-    setIsDropdownOpen(false);
-  };
-
   return (
     <header className="sticky top-0 z-40 w-full border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
       <div className="flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -191,39 +183,6 @@ export function Navbar({
                       </span>
                       <span className="text-[10px] text-slate-400">PCE Nagpur</span>
                     </div>
-                  </div>
-
-                  {/* Switch Role / Fast Testing */}
-                  <div className="p-2 border-b border-slate-100 dark:border-slate-800">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5 px-2">
-                      Switch Active Role
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => handleRoleSwitch("Teacher / Course Coordinator", "teacher.cse@pce.edu.in")}
-                      className={`w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs text-left ${
-                        currentRole.includes("Teacher")
-                          ? "bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 font-semibold"
-                          : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800"
-                      }`}
-                    >
-                      <span>Teacher / Course Coordinator</span>
-                      {currentRole.includes("Teacher") && <span className="text-[10px] font-bold">Active</span>}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleRoleSwitch("Department Admin / HOD", "hod.cse@pce.edu.in")}
-                      className={`w-full flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs text-left ${
-                        currentRole.includes("HOD") || currentRole.includes("Admin")
-                          ? "bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 font-semibold"
-                          : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800"
-                      }`}
-                    >
-                      <span>Department Admin / HOD</span>
-                      {(currentRole.includes("HOD") || currentRole.includes("Admin")) && (
-                        <span className="text-[10px] font-bold">Active</span>
-                      )}
-                    </button>
                   </div>
 
                   {/* Quick navigation links */}

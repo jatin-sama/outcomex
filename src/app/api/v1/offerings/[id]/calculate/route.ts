@@ -49,7 +49,7 @@ export async function POST(
       const { logAuditEvent } = await import("@/lib/audit/auditLogger");
       logAuditEvent({
         offering_id: id,
-        user_email: "teacher.cse@pce.edu.in",
+        user_email: request.headers.get("x-user-email") || "faculty@pce.edu.in",
         action: "ATTAINMENT_CALCULATED",
         resource_type: "calculation_runs",
         resource_id: `calc-${Date.now()}`,

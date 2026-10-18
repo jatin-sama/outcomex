@@ -23,7 +23,7 @@ export async function POST(
     const body = await request.json();
     const entry = logAuditEvent({
       offering_id: id,
-      user_email: body.user_email || "teacher.cse@pce.edu.in",
+      user_email: body.user_email || request.headers.get("x-user-email") || "faculty@pce.edu.in",
       action: body.action,
       resource_type: body.resource_type || "system",
       resource_id: body.resource_id,
