@@ -5,6 +5,7 @@ export type MarkStatus = 'PRESENT' | 'ABSENT' | 'EXEMPT' | 'NOT_ENTERED';
 export type POType = 'PO' | 'PSO';
 export type POAggregationMethod = 'WEIGHTED_AVERAGE' | 'MAPPING_AVERAGE';
 export type ReportStatus = 'COMPLETED' | 'FAILED' | 'PENDING';
+export type ReportWorkflowStatus = 'DRAFT' | 'CALCULATED' | 'SUBMITTED' | 'UNDER_REVIEW' | 'APPROVED' | 'LOCKED';
 
 export interface Department {
   id: string;
@@ -212,6 +213,15 @@ export interface ReportRun {
   file_checksum: string;
   validation_warnings: Array<Record<string, unknown>>;
   status: ReportStatus;
+  workflow_status?: ReportWorkflowStatus;
+  submitted_by?: string | null;
+  submitted_at?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  reviewer_comments?: string | null;
+  locked_at?: string | null;
+  reopened_at?: string | null;
+  reopen_reason?: string | null;
   created_at: string;
   course_offering?: CourseOffering;
   template_version?: TemplateVersion;

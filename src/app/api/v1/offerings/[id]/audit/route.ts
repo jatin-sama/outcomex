@@ -1,12 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuditLogs, logAuditEvent } from "@/lib/audit/auditLogger";
+import { getDbClient } from "@/lib/supabase/admin";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const logs = getAuditLogs(id);
+  let logs = getAuditLogs(id);
+
+  try {
+    const db = await getDbClient();
+    const { data: dbLogs, error } = await db
+      .from("audit_logs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (!error && dbLogs && dbLogs.length > 0) {
+      logs = dbLogs;
+    }
+  } catch {}
+
   return NextResponse.json({
     offering_id: id,
     count: logs.length,
@@ -29,6 +44,17 @@ export async function POST(
       resource_id: body.resource_id,
       payload: body.payload || {},
     });
+
+    // Persist to Supabase audit_logs table
+    try {
+      const db = await getDbClient();
+      await db.from("audit_logs").insert({
+        action: entry.action,
+        resource_type: entry.resource_type,
+        resource_id: entry.resource_id,
+        payload: entry.payload,
+      });
+    } catch {}
 
     return NextResponse.json({ success: true, log: entry });
   } catch (err: any) {

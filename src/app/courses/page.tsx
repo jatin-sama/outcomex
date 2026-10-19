@@ -31,20 +31,18 @@ const DEFAULT_COURSES = [
 
 export default function CoursesPage() {
   const [courses, setCourses] = useState(DEFAULT_COURSES);
+  const [loading, setLoading] = useState(false);
 
-  // Load persisted courses on mount
+  // Load courses from Supabase database via API
   React.useEffect(() => {
-    try {
-      const saved = localStorage.getItem("outcomeX_courses");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setCourses(parsed);
+    fetch("/api/v1/courses")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.courses && Array.isArray(data.courses) && data.courses.length > 0) {
+          setCourses(data.courses);
         }
-      }
-    } catch {
-      // fallback to initial
-    }
+      })
+      .catch(() => {});
   }, []);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -54,46 +52,54 @@ export default function CoursesPage() {
   const [newYear, setNewYear] = useState("3rd Yr");
   const [newScheme, setNewScheme] = useState(INITIAL_SCHEMES[0].id);
 
-  const handleCreateCourse = (e: React.FormEvent) => {
+  const handleCreateCourse = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCode.trim() || !newName.trim()) return;
 
+    setLoading(true);
     const selectedScheme = INITIAL_SCHEMES.find((s) => s.id === newScheme) || INITIAL_SCHEMES[0];
 
-    const newCourseObj = {
-      id: `c-${Date.now()}`,
-      department_id: "d0000000-0000-0000-0000-000000000001",
-      course_code: newCode.trim().toUpperCase(),
-      course_name: newName.trim(),
-      semester: newSemester,
-      year_of_study: newYear,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      studentsCount: 0,
-      cosCount: 4,
-      schemeName: selectedScheme.scheme_name,
-      offering: {
-        id: `o-${Date.now()}`,
-        course_id: `c-${Date.now()}`,
-        academic_year_id: "a0000000-0000-0000-0000-000000000001",
-        teacher_id: "u0000000-0000-0000-0000-000000000001",
-        section: "A",
-        attainment_scheme_id: selectedScheme.id,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-    };
-
-    const updated = [...courses, newCourseObj as any];
-    setCourses(updated);
     try {
-      localStorage.setItem("outcomeX_courses", JSON.stringify(updated));
+      const res = await fetch("/api/v1/courses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          course_code: newCode.trim().toUpperCase(),
+          course_name: newName.trim(),
+          semester: newSemester,
+          year_of_study: newYear,
+          attainment_scheme_id: selectedScheme.id,
+        }),
+      });
+
+      const data = await res.json();
+      if (data?.course) {
+        setCourses((prev) => [data.course, ...prev]);
+      } else {
+        // Fallback local append if backend returns without course object
+        const fallbackObj = {
+          id: `c-${Date.now()}`,
+          department_id: "d0000000-0000-0000-0000-000000000001",
+          course_code: newCode.trim().toUpperCase(),
+          course_name: newName.trim(),
+          semester: newSemester,
+          year_of_study: newYear,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          studentsCount: 0,
+          cosCount: 4,
+          schemeName: selectedScheme.scheme_name,
+        };
+        setCourses((prev) => [fallbackObj as any, ...prev]);
+      }
     } catch {
-      // ignore
+      // Offline fallback
+    } finally {
+      setLoading(false);
+      setIsModalOpen(false);
+      setNewCode("");
+      setNewName("");
     }
-    setIsModalOpen(false);
-    setNewCode("");
-    setNewName("");
   };
 
   return (

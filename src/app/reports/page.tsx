@@ -13,12 +13,14 @@ import {
   AlertTriangle,
   History,
   ArrowLeft,
-  FileCheck,
-  RefreshCw,
-  ExternalLink,
-  Layers,
+  Lock,
+  Unlock,
+  Send,
+  CheckCheck,
+  XCircle,
+  MessageSquare,
 } from "lucide-react";
-import { INITIAL_COURSE, INITIAL_OFFERING } from "@/lib/data/initialData";
+import { INITIAL_OFFERING } from "@/lib/data/initialData";
 
 export default function ReportsPage() {
   const offeringId = INITIAL_OFFERING.id;
@@ -27,6 +29,11 @@ export default function ReportsPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentDownloadUrl, setCurrentDownloadUrl] = useState<string | null>(null);
   const [history, setHistory] = useState<any[]>([]);
+
+  // Reopen Modal State
+  const [reopenModalReportId, setReopenModalReportId] = useState<string | null>(null);
+  const [reopenReason, setReopenReason] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
 
   // Fetch report history
   const fetchHistory = async () => {
@@ -50,7 +57,7 @@ export default function ReportsPage() {
       const res = await fetch(`/api/v1/offerings/${offeringId}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ schemeType: selectedScheme }),
+        body: JSON.stringify({ schemeType: selectedScheme, action: "GENERATE" }),
       });
       const data = await res.json();
 
@@ -62,6 +69,67 @@ export default function ReportsPage() {
       alert(`Generation failed: ${err.message}`);
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleWorkflowAction = async (reportId: string, action: string, comments?: string, reason?: string) => {
+    setActionLoading(true);
+    try {
+      const res = await fetch(`/api/v1/offerings/${offeringId}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, reportId, comments, reason }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Action ${action} failed`);
+      setReopenModalReportId(null);
+      setReopenReason("");
+      fetchHistory();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const getWorkflowBadge = (status: string) => {
+    switch (status) {
+      case "LOCKED":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900">
+            <Lock className="h-3 w-3" />
+            LOCKED
+          </span>
+        );
+      case "APPROVED":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300">
+            <CheckCheck className="h-3 w-3" />
+            APPROVED
+          </span>
+        );
+      case "SUBMITTED":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold bg-blue-100 text-blue-800 dark:bg-blue-950/80 dark:text-blue-300">
+            <Send className="h-3 w-3" />
+            SUBMITTED
+          </span>
+        );
+      case "DRAFT":
+        return (
+          <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300">
+            <AlertTriangle className="h-3 w-3" />
+            DRAFT / REVISIONS
+          </span>
+        );
+      case "CALCULATED":
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-bold bg-sky-100 text-sky-800 dark:bg-sky-950/80 dark:text-sky-300">
+            <CheckCircle2 className="h-3 w-3" />
+            CALCULATED
+          </span>
+        );
     }
   };
 
@@ -84,10 +152,10 @@ export default function ReportsPage() {
                 Back to Courses
               </Link>
               <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-                Excel Attainment Report Generator
+                Report Center & Excel Workbook Exports
               </h1>
               <p className="mt-0.5 text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                Generate byte-exact workbooks matching Priyadarshini College of Engineering template formats
+                Priyadarshini College of Engineering • Attainment Report Generation, Review & Locking Workflow
               </p>
             </div>
           </div>
@@ -177,7 +245,7 @@ export default function ReportsPage() {
                 <button
                   onClick={handleGenerate}
                   disabled={isGenerating}
-                  className="w-full sm:w-auto flex items-center justify-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-sky-600/25 transition-all disabled:opacity-50"
+                  className="w-full sm:w-auto flex items-center justify-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-sky-600/25 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   <FileSpreadsheet className="h-4 w-4" />
                   <span>{isGenerating ? "Generating Workbook..." : "Generate Verified Excel Report"}</span>
@@ -199,80 +267,161 @@ export default function ReportsPage() {
             <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xs space-y-4">
               <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
                 <ShieldCheck className="h-4 w-4 text-sky-600" />
-                Template Integrity Safeguards
+                Academic Governance Lifecycle
               </h3>
 
               <div className="space-y-3 text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+                  <p className="font-bold text-slate-800 dark:text-slate-200 mb-1">State Machine:</p>
+                  <p className="font-mono text-[11px] text-sky-600 dark:text-sky-400">
+                    CALCULATED &rarr; SUBMITTED &rarr; APPROVED &rarr; LOCKED
+                  </p>
+                </div>
                 <p>
-                  <strong>Template Fidelity:</strong> The OutcomeX Excel adapter loads the verified master workbook and populates student rows while retaining all cell formulas (e.g. <code className="font-mono text-[11px]">=AVERAGE(...)</code>, <code className="font-mono text-[11px]">=COUNTIF(...)</code>).
+                  <strong>Course Coordinator:</strong> Generates calculation snapshot and submits for Department Head verification.
                 </p>
                 <p>
-                  <strong>Formula Repair:</strong> Broken references in the 30/20 template (such as `#REF!` in row 7) are cleanly reconstructed without modifying the original template.
+                  <strong>HOD Review:</strong> Reviews attainment percentages, approves compliant reports or requests revisions with comments.
                 </p>
                 <p>
-                  <strong>Reproducibility:</strong> Every generated report receives an immutable SHA-256 checksum and timestamp for accreditation audit trails.
+                  <strong>Locking & Immutability:</strong> Approved reports can be permanently locked for NBA Accreditation. Reopening requires logged justification.
                 </p>
               </div>
             </div>
           </div>
 
-          {/* Report History */}
+          {/* Report History & Lifecycle Grid */}
           <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                   <History className="h-4 w-4 text-slate-500" />
-                  Report Generation & Download History
+                  Report Lifecycle, Review & Download Registry
                 </h2>
-                <p className="text-xs text-slate-500">Previously compiled Excel workbooks available for re-download</p>
+                <p className="text-xs text-slate-500">Track submission status, approvals, lock states, and re-download audited workbooks</p>
               </div>
 
-              <span className="text-xs text-slate-400">{history.length} report run(s) logged</span>
+              <span className="text-xs text-slate-400 font-semibold">{history.length} report snapshot(s)</span>
             </div>
 
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-400 uppercase font-semibold">
-                    <th className="py-2.5 px-3">Filename</th>
+                    <th className="py-2.5 px-3">Filename & Version</th>
                     <th className="py-2.5 px-3">Template</th>
-                    <th className="py-2.5 px-3 text-center">File Size</th>
-                    <th className="py-2.5 px-3">Generated At</th>
-                    <th className="py-2.5 px-3 text-center">Status</th>
+                    <th className="py-2.5 px-3">Lifecycle State</th>
+                    <th className="py-2.5 px-3">Audit / Notes</th>
+                    <th className="py-2.5 px-3 text-center">Governance Actions</th>
                     <th className="py-2.5 px-3 text-center">Download</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-mono">
-                  {history.map((rep) => (
-                    <tr key={rep.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
-                      <td className="py-3 px-3 font-semibold text-slate-900 dark:text-white font-sans">
-                        {rep.filename}
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 dark:text-slate-300 font-sans">
-                        {rep.template_name}
-                      </td>
-                      <td className="py-3 px-3 text-center text-slate-500">
-                        {(rep.file_size_bytes / 1024).toFixed(1)} KB
-                      </td>
-                      <td className="py-3 px-3 text-slate-500 font-sans">
-                        {new Date(rep.generated_at).toLocaleString()}
-                      </td>
-                      <td className="py-3 px-3 text-center font-sans">
-                        <span className="inline-block rounded-md px-2 py-0.5 text-[11px] font-bold text-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 dark:text-emerald-300">
-                          {rep.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-center font-sans">
-                        <a
-                          href={`/api/v1/reports/download?filename=${encodeURIComponent(rep.filename)}`}
-                          className="text-sky-600 hover:text-sky-700 font-bold inline-flex items-center gap-1"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                          <span>Download</span>
-                        </a>
-                      </td>
-                    </tr>
-                  ))}
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-sans">
+                  {history.map((rep) => {
+                    const status = rep.workflow_status || "CALCULATED";
+                    return (
+                      <tr key={rep.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                        <td className="py-3 px-3 font-semibold text-slate-900 dark:text-white">
+                          <div>{rep.filename}</div>
+                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                            {new Date(rep.generated_at).toLocaleString()}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 dark:text-slate-300">
+                          {rep.template_name}
+                        </td>
+                        <td className="py-3 px-3">
+                          {getWorkflowBadge(status)}
+                        </td>
+                        <td className="py-3 px-3 text-slate-500 max-w-xs truncate">
+                          {rep.reviewer_comments && (
+                            <div className="text-[11px] text-slate-700 dark:text-slate-300 flex items-center gap-1">
+                              <MessageSquare className="h-3 w-3 text-sky-500 shrink-0" />
+                              <span className="truncate">{rep.reviewer_comments}</span>
+                            </div>
+                          )}
+                          {rep.reopen_reason && (
+                            <div className="text-[11px] text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                              <Unlock className="h-3 w-3 shrink-0" />
+                              <span className="truncate">Reopened: {rep.reopen_reason}</span>
+                            </div>
+                          )}
+                          {!rep.reviewer_comments && !rep.reopen_reason && (
+                            <span className="text-[11px] text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                            {(status === "CALCULATED" || status === "DRAFT") && (
+                              <button
+                                onClick={() => handleWorkflowAction(rep.id, "SUBMIT")}
+                                disabled={actionLoading}
+                                className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold bg-sky-50 hover:bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300 border border-sky-200 dark:border-sky-800 cursor-pointer"
+                              >
+                                <Send className="h-3 w-3" />
+                                <span>Submit for Review</span>
+                              </button>
+                            )}
+
+                            {status === "SUBMITTED" && (
+                              <>
+                                <button
+                                  onClick={() => handleWorkflowAction(rep.id, "APPROVE")}
+                                  disabled={actionLoading}
+                                  className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 cursor-pointer"
+                                >
+                                  <CheckCheck className="h-3 w-3" />
+                                  <span>Approve</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const comment = prompt("Enter revision comments for faculty:");
+                                    if (comment) handleWorkflowAction(rep.id, "REJECT", comment);
+                                  }}
+                                  disabled={actionLoading}
+                                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-200 dark:border-rose-800 cursor-pointer"
+                                >
+                                  <XCircle className="h-3 w-3" />
+                                  <span>Request Revisions</span>
+                                </button>
+                              </>
+                            )}
+
+                            {status === "APPROVED" && (
+                              <button
+                                onClick={() => handleWorkflowAction(rep.id, "LOCK")}
+                                disabled={actionLoading}
+                                className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900 cursor-pointer"
+                              >
+                                <Lock className="h-3 w-3" />
+                                <span>Lock for NBA</span>
+                              </button>
+                            )}
+
+                            {status === "LOCKED" && (
+                              <button
+                                onClick={() => setReopenModalReportId(rep.id)}
+                                disabled={actionLoading}
+                                className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800 cursor-pointer"
+                              >
+                                <Unlock className="h-3 w-3" />
+                                <span>Reopen</span>
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-center font-sans">
+                          <a
+                            href={`/api/v1/reports/download?filename=${encodeURIComponent(rep.filename)}`}
+                            className="text-sky-600 hover:text-sky-700 font-bold inline-flex items-center gap-1"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            <span>Download</span>
+                          </a>
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {history.length === 0 && (
                     <tr>
                       <td colSpan={6} className="py-8 text-center text-slate-400 font-sans">
@@ -286,6 +435,57 @@ export default function ReportsPage() {
           </div>
         </main>
       </div>
+
+      {/* Reopen Modal */}
+      {reopenModalReportId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xl space-y-4">
+            <div className="flex items-center gap-3 text-amber-600">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 dark:bg-amber-950/50">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white">Authorized Report Reopening</h3>
+                <p className="text-xs text-slate-500">Provide an institutional reason for reopening this locked report</p>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Reason / Approval Reference
+              </label>
+              <textarea
+                value={reopenReason}
+                onChange={(e) => setReopenReason(e.target.value)}
+                placeholder="e.g. Recalculation approved by HOD following marks re-evaluation (Order #2026-CSE-14)"
+                rows={3}
+                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setReopenModalReportId(null);
+                  setReopenReason("");
+                }}
+                className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!reopenReason.trim() || actionLoading}
+                onClick={() => handleWorkflowAction(reopenModalReportId, "REOPEN", undefined, reopenReason)}
+                className="rounded-xl bg-amber-600 hover:bg-amber-500 px-4 py-2 text-xs font-semibold text-white shadow-xs disabled:opacity-50 cursor-pointer"
+              >
+                Confirm Reopen & Audit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

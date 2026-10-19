@@ -26,28 +26,13 @@ export default function StudentRosterPage() {
 
   const [roster, setRoster] = useState<ReferenceStudent[]>(REFERENCE_STUDENTS);
 
-  // Load persisted roster on mount
+  // Load roster from Supabase database via API
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("outcomeX_roster");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setRoster(parsed);
-          return;
-        }
-      }
-    } catch {
-      // fallback
-    }
-
-    // Otherwise fetch from API
     fetch(`/api/v1/offerings/${offeringId}/roster`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.roster && Array.isArray(data.roster) && data.roster.length > 0) {
           setRoster(data.roster);
-          localStorage.setItem("outcomeX_roster", JSON.stringify(data.roster));
         }
       })
       .catch(() => {});

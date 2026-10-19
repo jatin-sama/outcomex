@@ -1,5 +1,7 @@
 import React from "react";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
 import { Navbar } from "@/components/layout/Navbar";
 import { Sidebar } from "@/components/layout/Sidebar";
 import {
@@ -16,7 +18,68 @@ import {
   Calculator,
 } from "lucide-react";
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/login");
+  }
+
+  const userRole = (user.user_metadata?.role as string) || "Teacher / Course Coordinator";
+  const userEmail = user.email || "";
+
+  let enrolledCount = 81;
+  let activeOfferingsCount = 1;
+  let pendingReportsCount = 0;
+  let activeCourseName = "Introduction to Data Science (25UCS623T)";
+  let activeOfferingSection = "3rd Year / 5th Semester • Section A • Department of Computer Science & Engineering";
+
+  try {
+    const { getDbClient } = await import("@/lib/supabase/admin");
+    const db = await getDbClient();
+
+    const { count: studentCount } = await db
+      .from("students")
+      .select("*", { count: "exact", head: true });
+    if (typeof studentCount === "number" && studentCount > 0) {
+      enrolledCount = studentCount;
+    }
+
+    const { data: offerings } = await db
+      .from("course_offerings")
+      .select(`
+        id,
+        section,
+        courses (
+          course_code,
+          course_name,
+          semester,
+          year_of_study
+        )
+      `)
+      .limit(5);
+
+    if (offerings && offerings.length > 0) {
+      activeOfferingsCount = offerings.length;
+      const first: any = offerings[0];
+      if (first.courses) {
+        activeCourseName = `${first.courses.course_name} (${first.courses.course_code})`;
+        activeOfferingSection = `${first.courses.year_of_study} / ${first.courses.semester} • Section ${first.section || "A"} • Department of Computer Science & Engineering`;
+      }
+    }
+
+    const { count: pendingCount } = await db
+      .from("report_runs")
+      .select("*", { count: "exact", head: true })
+      .in("workflow_status", ["SUBMITTED", "UNDER_REVIEW"]);
+    if (typeof pendingCount === "number") {
+      pendingReportsCount = pendingCount;
+    }
+  } catch {}
+
   // Reference data extracted from Autonomous_Attainment_IDS_3rd _25_26 (2).xlsx
   const coResults = [
     { code: "CO1", description: "Foundational principles & workflow of data science", direct: 3.0, indirect: 3.0, final: 3.0, level: 3, percent: "88.9%" },
@@ -44,7 +107,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-50/50 dark:bg-slate-950">
-      <Navbar departmentCode="CSE" userRole="Teacher / Course Coordinator" />
+      <Navbar departmentCode="CSE" userRole={userRole} userEmail={userEmail} />
 
       <div className="flex">
         <Sidebar currentPath="/" />
@@ -60,10 +123,10 @@ export default function DashboardPage() {
                   <span>Autonomous Scheme 2025-26</span>
                 </div>
                 <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
-                  Introduction to Data Science (25UCS623T)
+                  {activeCourseName}
                 </h1>
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                  3rd Year / 5th Semester • Section A • Department of Computer Science & Engineering
+                  {activeOfferingSection}
                 </p>
               </div>
 
@@ -93,8 +156,8 @@ export default function DashboardPage() {
                   <Users className="h-4 w-4 text-sky-600 dark:text-sky-400" />
                   <span>Enrolled Students</span>
                 </div>
-                <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">81</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">80 attended assessments</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{enrolledCount}</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">{enrolledCount > 1 ? `${enrolledCount - 1} attended assessments` : "Active student roster"}</p>
               </div>
 
               <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 p-4 border border-slate-100 dark:border-slate-800">
@@ -125,6 +188,31 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+
+          {/* Pending Reports Notice */}
+          {pendingReportsCount > 0 && (
+            <div className="rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50/80 dark:bg-sky-950/30 p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="h-5 w-5 text-sky-600 dark:text-sky-400 shrink-0" />
+                  <div className="text-sm">
+                    <h2 className="font-semibold text-sky-900 dark:text-sky-200">
+                      Attainment Reports Awaiting Review ({pendingReportsCount})
+                    </h2>
+                    <p className="text-sky-800/80 dark:text-sky-400/80 text-xs mt-0.5">
+                      Submitted course attainment reports are pending HOD / Coordinator approval.
+                    </p>
+                  </div>
+                </div>
+                <Link
+                  href="/reports"
+                  className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition-colors"
+                >
+                  Review in Report Center
+                </Link>
+              </div>
+            </div>
+          )}
 
           {/* Data Validation Alert (Findings from Audit) */}
           <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/80 dark:bg-amber-950/20 p-4">

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { REFERENCE_STUDENTS, ReferenceStudent } from "@/lib/data/referenceStudents";
+import { getDbClient } from "@/lib/supabase/admin";
 
 let currentRosters: Record<string, ReferenceStudent[]> = {
   "o0000000-0000-0000-0000-000000000001": JSON.parse(JSON.stringify(REFERENCE_STUDENTS)),
@@ -14,7 +15,40 @@ export async function GET(
   const query = (searchParams.get("q") || "").toLowerCase().trim();
   const statusFilter = searchParams.get("status");
 
-  let roster = currentRosters[id] || [...REFERENCE_STUDENTS];
+  let roster: ReferenceStudent[] = currentRosters[id] || [...REFERENCE_STUDENTS];
+
+  try {
+    const db = await getDbClient();
+    const { data: enrollments, error } = await db
+      .from("enrollments")
+      .select(`
+        id,
+        roll_no,
+        status,
+        students (
+          id,
+          student_name,
+          university_reg_no,
+          gender
+        )
+      `)
+      .eq("course_offering_id", id)
+      .order("roll_no", { ascending: true });
+
+    if (!error && enrollments && enrollments.length > 0) {
+      roster = enrollments.map((e: any) => ({
+        id: e.id,
+        roll_no: e.roll_no,
+        student_name: e.students?.student_name || `Student ${e.roll_no}`,
+        university_reg_no: e.students?.university_reg_no || e.roll_no,
+        gender: e.students?.gender || "M",
+        status: (e.status as any) || "ENROLLED",
+      }));
+      currentRosters[id] = roster;
+    }
+  } catch {
+    // Fallback to cache/reference
+  }
 
   if (query) {
     roster = roster.filter(
@@ -59,6 +93,15 @@ export async function POST(
     const duplicates: string[] = [];
     const added: ReferenceStudent[] = [];
 
+    const db = await getDbClient();
+
+    // Get a department ID
+    let departmentId = "d0000000-0000-0000-0000-000000000001";
+    try {
+      const { data: depts } = await db.from("departments").select("id").limit(1);
+      if (depts && depts.length > 0) departmentId = depts[0].id;
+    } catch {}
+
     for (const student of studentsToAdd) {
       const roll = String(student.roll_no).trim();
       const name = String(student.student_name || "").trim();
@@ -69,13 +112,50 @@ export async function POST(
         duplicates.push(roll);
       } else {
         existingRolls.add(roll);
-        const newStudent: ReferenceStudent = {
-          id: `s-custom-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+
+        let studentRecordId = `s-custom-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+        let enrollmentRecordId = studentRecordId;
+
+        // Persist to Supabase
+        try {
+          const { data: newStudent } = await db
+            .from("students")
+            .insert({
+              department_id: departmentId,
+              student_name: name,
+              university_reg_no: roll,
+            })
+            .select()
+            .single();
+
+          if (newStudent?.id) {
+            studentRecordId = newStudent.id;
+            const { data: newEnrollment } = await db
+              .from("enrollments")
+              .insert({
+                course_offering_id: id,
+                student_id: newStudent.id,
+                roll_no: roll,
+                status: (student.status as any) || "ENROLLED",
+              })
+              .select()
+              .single();
+
+            if (newEnrollment?.id) {
+              enrollmentRecordId = newEnrollment.id;
+            }
+          }
+        } catch {
+          // Graceful local cache fallback
+        }
+
+        const newStudentObj: ReferenceStudent = {
+          id: enrollmentRecordId,
           roll_no: roll,
           student_name: name,
           status: (student.status as any) || "ENROLLED",
         };
-        added.push(newStudent);
+        added.push(newStudentObj);
       }
     }
 
@@ -123,6 +203,15 @@ export async function PATCH(
       );
     }
 
+    // Persist to Supabase
+    try {
+      const db = await getDbClient();
+      await db
+        .from("enrollments")
+        .update({ status })
+        .eq("id", student_id);
+    } catch {}
+
     const currentRoster = currentRosters[id] || [...REFERENCE_STUDENTS];
     const index = currentRoster.findIndex((s) => s.id === student_id);
 
@@ -156,6 +245,12 @@ export async function DELETE(
   if (!studentId) {
     return NextResponse.json({ error: "student_id query param is required." }, { status: 400 });
   }
+
+  // Persist deletion to Supabase
+  try {
+    const db = await getDbClient();
+    await db.from("enrollments").delete().eq("id", studentId);
+  } catch {}
 
   const currentRoster = currentRosters[id] || [...REFERENCE_STUDENTS];
   const initialLen = currentRoster.length;

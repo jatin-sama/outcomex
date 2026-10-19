@@ -26,17 +26,16 @@ export default function MappingsPage() {
     JSON.parse(JSON.stringify(INITIAL_MAPPINGS))
   );
 
-  // Load saved mappings on mount
+  // Load mappings from Supabase database via API
   React.useEffect(() => {
-    try {
-      const saved = localStorage.getItem("outcomeX_mappings");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
-          setMappings(parsed);
+    fetch("/api/v1/offerings/o0000000-0000-0000-0000-000000000001/mappings")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.mappings && typeof data.mappings === "object" && Object.keys(data.mappings).length > 0) {
+          setMappings(data.mappings);
         }
-      }
-    } catch {}
+      })
+      .catch(() => {});
   }, []);
 
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -75,14 +74,19 @@ export default function MappingsPage() {
     poAverages[po] = count > 0 ? (sum / count).toFixed(2) : "-";
   });
 
-  const handleSave = () => {
-    setSaveSuccess(true);
+  const handleSave = async () => {
     try {
-      localStorage.setItem("outcomeX_mappings", JSON.stringify(mappings));
+      await fetch("/api/v1/offerings/o0000000-0000-0000-0000-000000000001/mappings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mappings }),
+      });
     } catch {}
 
+    setSaveSuccess(true);
+
     // Log audit event via API
-    fetch("/api/v1/offerings/off-ids-3rd-2526/audit", {
+    fetch("/api/v1/offerings/o0000000-0000-0000-0000-000000000001/audit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

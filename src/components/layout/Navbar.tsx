@@ -36,45 +36,50 @@ export function Navbar({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Check saved session in localStorage first
-    if (typeof window !== "undefined") {
-      const savedUser = localStorage.getItem("outcomeX_user");
-      const savedRole = localStorage.getItem("outcomeX_role");
-      if (savedUser) {
-        setCurrentUser(savedUser);
-      }
-      if (savedRole) {
-        setCurrentRole(savedRole);
-      }
-    }
-
-    // Attempt to check active Supabase Auth session
     try {
       const supabase = createClient();
       supabase.auth.getUser().then(({ data, error }) => {
         if (!error && data?.user?.email) {
           setCurrentUser(data.user.email);
-          const role = (data.user.user_metadata?.role as string) || "Teacher";
+          const role = (data.user.user_metadata?.role as string) || "Teacher / Course Coordinator";
           setCurrentRole(role);
           setAuthMode("supabase");
-          localStorage.setItem("outcomeX_user", data.user.email);
-          localStorage.setItem("outcomeX_role", role);
+          if (typeof window !== "undefined") {
+            localStorage.setItem("outcomeX_user", data.user.email);
+            localStorage.setItem("outcomeX_role", role);
+          }
+        } else {
+          if (typeof window !== "undefined") {
+            localStorage.removeItem("outcomeX_user");
+            localStorage.removeItem("outcomeX_role");
+          }
+          setCurrentUser(null);
         }
       }).catch(() => {
-        // Fallback to local session gracefully if Supabase keys not initialized
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("outcomeX_user");
+          localStorage.removeItem("outcomeX_role");
+        }
+        setCurrentUser(null);
       });
 
       const { data: authListener } = supabase.auth.onAuthStateChange(
         (_event, session) => {
           if (session?.user?.email) {
             setCurrentUser(session.user.email);
-            const role = (session.user.user_metadata?.role as string) || "Teacher";
+            const role = (session.user.user_metadata?.role as string) || "Teacher / Course Coordinator";
             setCurrentRole(role);
             setAuthMode("supabase");
-            localStorage.setItem("outcomeX_user", session.user.email);
-            localStorage.setItem("outcomeX_role", role);
+            if (typeof window !== "undefined") {
+              localStorage.setItem("outcomeX_user", session.user.email);
+              localStorage.setItem("outcomeX_role", role);
+            }
           } else {
-            // No active session
+            if (typeof window !== "undefined") {
+              localStorage.removeItem("outcomeX_user");
+              localStorage.removeItem("outcomeX_role");
+            }
+            setCurrentUser(null);
           }
         }
       );
@@ -83,7 +88,7 @@ export function Navbar({
         authListener?.subscription.unsubscribe();
       };
     } catch {
-      // Graceful local handling
+      setCurrentUser(null);
     }
   }, []);
 

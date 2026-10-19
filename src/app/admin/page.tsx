@@ -30,40 +30,66 @@ export default function AdminPage() {
   const [level2Boundary, setLevel2Boundary] = useState(45);
   const [level3Boundary, setLevel3Boundary] = useState(55);
   const [absenteePolicy, setAbsenteePolicy] = useState<"zero" | "exclude">("zero");
+  const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
-  // Load saved policies on mount
+  // Load saved policies on mount from database API
   React.useEffect(() => {
-    try {
-      const saved = localStorage.getItem("outcomeX_admin_policies");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.poAggregationMode) setPoAggregationMode(parsed.poAggregationMode);
-        if (parsed.studentThreshold) setStudentThreshold(Number(parsed.studentThreshold));
-        if (parsed.level2Boundary) setLevel2Boundary(Number(parsed.level2Boundary));
-        if (parsed.level3Boundary) setLevel3Boundary(Number(parsed.level3Boundary));
-        if (parsed.absenteePolicy) setAbsenteePolicy(parsed.absenteePolicy);
-      }
-    } catch {}
+    async function loadPolicies() {
+      try {
+        const res = await fetch("/api/v1/admin/policies");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.poAggregationMode) setPoAggregationMode(data.poAggregationMode);
+          if (data.studentThreshold) setStudentThreshold(Number(data.studentThreshold));
+          if (data.level2Boundary) setLevel2Boundary(Number(data.level2Boundary));
+          if (data.level3Boundary) setLevel3Boundary(Number(data.level3Boundary));
+          if (data.absenteePolicy) setAbsenteePolicy(data.absenteePolicy);
+          return;
+        }
+      } catch {}
+
+      // Fallback to local storage if API is unreachable
+      try {
+        const saved = localStorage.getItem("outcomeX_admin_policies");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.poAggregationMode) setPoAggregationMode(parsed.poAggregationMode);
+          if (parsed.studentThreshold) setStudentThreshold(Number(parsed.studentThreshold));
+          if (parsed.level2Boundary) setLevel2Boundary(Number(parsed.level2Boundary));
+          if (parsed.level3Boundary) setLevel3Boundary(Number(parsed.level3Boundary));
+          if (parsed.absenteePolicy) setAbsenteePolicy(parsed.absenteePolicy);
+        }
+      } catch {}
+    }
+    loadPolicies();
   }, []);
 
-  const handleSavePolicies = (e: React.FormEvent) => {
+  const handleSavePolicies = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      localStorage.setItem(
-        "outcomeX_admin_policies",
-        JSON.stringify({
-          poAggregationMode,
-          studentThreshold,
-          level2Boundary,
-          level3Boundary,
-          absenteePolicy,
-        })
-      );
-    } catch {}
+    setIsSaving(true);
+    const payload = {
+      poAggregationMode,
+      studentThreshold,
+      level2Boundary,
+      level3Boundary,
+      absenteePolicy,
+    };
 
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    try {
+      localStorage.setItem("outcomeX_admin_policies", JSON.stringify(payload));
+      await fetch("/api/v1/admin/policies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
+    } catch {
+      setSavedSuccess(true);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -394,10 +420,11 @@ export default function AdminPage() {
                   <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
                     <button
                       type="submit"
-                      className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-sky-500 transition-colors"
+                      disabled={isSaving}
+                      className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-5 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-sky-500 transition-colors disabled:opacity-50"
                     >
                       <Save className="h-4 w-4" />
-                      <span>Save Department Policies</span>
+                      <span>{isSaving ? "Saving to Database..." : "Save Department Policies"}</span>
                     </button>
                   </div>
                 </form>

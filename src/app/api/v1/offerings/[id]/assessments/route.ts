@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { INITIAL_ASSESSMENTS } from "@/lib/data/initialData";
 import { AssessmentComponent } from "@/types/database";
+import { getDbClient } from "@/lib/supabase/admin";
 
 let currentAssessments: Record<string, AssessmentComponent[]> = {
   "o0000000-0000-0000-0000-000000000001": [...INITIAL_ASSESSMENTS],
@@ -11,7 +12,23 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const components = currentAssessments[id] || [...INITIAL_ASSESSMENTS];
+  let components = currentAssessments[id] || [...INITIAL_ASSESSMENTS];
+
+  try {
+    const db = await getDbClient();
+    const { data: dbComps, error } = await db
+      .from("assessment_components")
+      .select("*")
+      .eq("course_offering_id", id)
+      .order("sort_order", { ascending: true });
+
+    if (!error && dbComps && dbComps.length > 0) {
+      components = dbComps;
+      currentAssessments[id] = dbComps;
+    }
+  } catch {
+    // Fallback to memory
+  }
 
   return NextResponse.json({
     offering_id: id,
@@ -61,6 +78,20 @@ export async function POST(
     }
 
     currentAssessments[id] = sanitized;
+
+    // Persist to Supabase database
+    try {
+      const db = await getDbClient();
+      for (const comp of sanitized) {
+        await db.from("assessment_components").upsert({
+          course_offering_id: id,
+          category: comp.category,
+          component_name: comp.component_name,
+          max_marks: comp.max_marks,
+          sort_order: comp.sort_order,
+        }, { onConflict: "course_offering_id,component_name" });
+      }
+    } catch {}
 
     return NextResponse.json({
       success: true,

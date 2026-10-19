@@ -18,6 +18,7 @@ import {
   ArrowLeft,
   Sliders,
   Award,
+  MessageSquare,
 } from "lucide-react";
 import {
   INITIAL_COURSE,
@@ -34,7 +35,7 @@ export default function CourseSetupPage() {
   const params = useParams();
   const offeringId = (params?.id as string) || INITIAL_OFFERING.id;
 
-  const [activeTab, setActiveTab] = useState<"scheme" | "cos" | "mappings" | "assessments">("cos");
+  const [activeTab, setActiveTab] = useState<"scheme" | "cos" | "mappings" | "assessments" | "indirect">("cos");
 
   // State
   const [courseInfo, setCourseInfo] = useState({
@@ -60,6 +61,13 @@ export default function CourseSetupPage() {
   const [assessments, setAssessments] = useState<AssessmentComponent[]>(
     JSON.parse(JSON.stringify(INITIAL_ASSESSMENTS))
   );
+  const [indirectRatings, setIndirectRatings] = useState<Array<{
+    co_code: string;
+    survey_score: number;
+    normalized_level: number;
+    sample_size: number;
+    question_prompt?: string;
+  }>>([]);
 
   const [statusMessage, setStatusMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -245,6 +253,38 @@ export default function CourseSetupPage() {
     }
   };
 
+  // Load indirect survey ratings on mount
+  useEffect(() => {
+    fetch(`/api/v1/offerings/${offeringId}/indirect`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.ratings && Array.isArray(data.ratings)) {
+          setIndirectRatings(data.ratings);
+        }
+      })
+      .catch(() => {});
+  }, [offeringId]);
+
+  // Save Indirect Exit Survey ratings
+  const handleSaveIndirect = async () => {
+    setIsSaving(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`/api/v1/offerings/${offeringId}/indirect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ratings: indirectRatings }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save exit survey ratings");
+      setStatusMessage({ type: "success", text: "Successfully saved Course Exit Survey ratings!" });
+    } catch (err: any) {
+      setStatusMessage({ type: "error", text: err.message });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50/50 dark:bg-slate-950">
       <Navbar departmentCode="CSE" userRole="Teacher / Course Coordinator" />
@@ -296,6 +336,7 @@ export default function CourseSetupPage() {
               { id: "cos", label: `Course Outcomes (${cos.length})`, icon: Layers },
               { id: "mappings", label: "CO-PO Mapping Matrix", icon: Network },
               { id: "assessments", label: `Assessments (${assessments.length})`, icon: Calculator },
+              { id: "indirect", label: "Exit Survey (Indirect)", icon: MessageSquare },
               { id: "scheme", label: "Attainment Scheme & Weights", icon: Sliders },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -675,6 +716,118 @@ export default function CourseSetupPage() {
                       </div>
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: EXIT SURVEY (INDIRECT ATTAINMENT) */}
+          {activeTab === "indirect" && (
+            <div className="space-y-6">
+              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                      Course Exit Survey & Indirect Attainment
+                    </h2>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Configure survey questions, student response counts, and attainment rubric levels (0.0 to 3.0) contributing 20% to final CO attainment.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={handleSaveIndirect}
+                    disabled={isSaving}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    {isSaving ? "Saving..." : "Save Exit Survey Ratings"}
+                  </button>
+                </div>
+
+                <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {cos.map((co) => {
+                    const currentRating = indirectRatings.find((r) => r.co_code === co.co_code) || {
+                      co_code: co.co_code,
+                      survey_score: 4.5,
+                      normalized_level: 3.0,
+                      sample_size: 78,
+                      question_prompt: `Rate your proficiency in applying concepts from ${co.description || co.co_code}`,
+                    };
+
+                    const updateRating = (field: string, value: any) => {
+                      setIndirectRatings((prev) => {
+                        const exists = prev.some((r) => r.co_code === co.co_code);
+                        if (!exists) {
+                          return [...prev, { ...currentRating, [field]: value }];
+                        }
+                        return prev.map((r) => (r.co_code === co.co_code ? { ...r, [field]: value } : r));
+                      });
+                    };
+
+                    return (
+                      <div key={co.id || co.co_code} className="py-4 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="font-extrabold text-sm text-sky-600 dark:text-sky-400">
+                              {co.co_code}
+                            </span>
+                            <span className="text-xs text-slate-500 truncate max-w-md">
+                              {co.description || "Course outcome statement"}
+                            </span>
+                          </div>
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                            Level: {currentRating.normalized_level} / 3.0
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="sm:col-span-2">
+                            <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                              Exit Survey Question Prompt
+                            </label>
+                            <input
+                              type="text"
+                              value={currentRating.question_prompt || ""}
+                              onChange={(e) => updateRating("question_prompt", e.target.value)}
+                              placeholder={`Survey question prompt for ${co.co_code}`}
+                              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs text-slate-900 dark:text-white"
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                                Sample Size
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={200}
+                                value={currentRating.sample_size}
+                                onChange={(e) => updateRating("sample_size", Number(e.target.value))}
+                                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs text-slate-900 dark:text-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                                Attainment Level (0-3)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={3}
+                                step={0.1}
+                                value={currentRating.normalized_level}
+                                onChange={(e) => updateRating("normalized_level", Number(e.target.value))}
+                                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs text-slate-900 dark:text-white font-bold text-sky-600"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>

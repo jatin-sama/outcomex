@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { INITIAL_POS, INITIAL_MAPPINGS } from "@/lib/data/initialData";
+import { getDbClient } from "@/lib/supabase/admin";
 
 let currentMappings: Record<string, Record<string, Record<string, number | null>>> = {
   "o0000000-0000-0000-0000-000000000001": JSON.parse(JSON.stringify(INITIAL_MAPPINGS)),
@@ -10,7 +11,40 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const mappings = currentMappings[id] || INITIAL_MAPPINGS;
+  let mappings = currentMappings[id] || INITIAL_MAPPINGS;
+
+  try {
+    const db = await getDbClient();
+    const { data: dbMappings, error } = await db
+      .from("course_po_mappings")
+      .select(`
+        mapping_strength,
+        course_outcomes (
+          co_code
+        ),
+        program_outcomes (
+          po_code
+        )
+      `);
+
+    if (!error && dbMappings && dbMappings.length > 0) {
+      const reconstructed: Record<string, Record<string, number | null>> = {};
+      for (const row of dbMappings as any[]) {
+        const co = row.course_outcomes?.co_code;
+        const po = row.program_outcomes?.po_code;
+        if (co && po) {
+          if (!reconstructed[co]) reconstructed[co] = {};
+          reconstructed[co][po] = row.mapping_strength;
+        }
+      }
+      if (Object.keys(reconstructed).length > 0) {
+        mappings = reconstructed;
+        currentMappings[id] = reconstructed;
+      }
+    }
+  } catch {
+    // Fallback to memory
+  }
 
   return NextResponse.json({
     offering_id: id,
@@ -59,6 +93,48 @@ export async function POST(
     }
 
     currentMappings[id] = sanitized;
+
+    // Persist to Supabase database
+    try {
+      const db = await getDbClient();
+      const { data: cos } = await db.from("course_outcomes").select("id, co_code");
+      const { data: pos } = await db.from("program_outcomes").select("id, po_code");
+
+      if (cos && pos && cos.length > 0 && pos.length > 0) {
+        const coMap = new Map(cos.map((c: any) => [c.co_code, c.id]));
+        const poMap = new Map(pos.map((p: any) => [p.po_code, p.id]));
+
+        const mappingsToUpsert: Array<{
+          course_outcome_id: string;
+          program_outcome_id: string;
+          mapping_strength: number;
+        }> = [];
+
+        for (const [coCode, pMap] of Object.entries(sanitized)) {
+          const coId = coMap.get(coCode);
+          if (!coId) continue;
+
+          for (const [poCode, strength] of Object.entries(pMap)) {
+            const poId = poMap.get(poCode);
+            if (!poId || strength === null) continue;
+
+            mappingsToUpsert.push({
+              course_outcome_id: coId,
+              program_outcome_id: poId,
+              mapping_strength: strength,
+            });
+          }
+        }
+
+        if (mappingsToUpsert.length > 0) {
+          await db
+            .from("course_po_mappings")
+            .upsert(mappingsToUpsert, { onConflict: "course_outcome_id,program_outcome_id" });
+        }
+      }
+    } catch {
+      // Fallback
+    }
 
     return NextResponse.json({
       success: true,

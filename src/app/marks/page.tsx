@@ -47,25 +47,13 @@ export default function MarksPage() {
   // Grid State
   const [marksData, setMarksData] = useState<StudentMarksRecord[]>(REFERENCE_MARKS);
 
-  // Load persisted marks on mount
+  // Load marks from Supabase database via API
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("outcomeX_marks");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setMarksData(parsed);
-          return;
-        }
-      }
-    } catch {}
-
     fetch(`/api/v1/offerings/${offeringId}/marks`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.marks && Array.isArray(data.marks) && data.marks.length > 0) {
           setMarksData(data.marks);
-          localStorage.setItem("outcomeX_marks", JSON.stringify(data.marks));
         }
       })
       .catch(() => {});

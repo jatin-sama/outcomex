@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { INITIAL_COS } from "@/lib/data/initialData";
 import { CourseOutcome } from "@/types/database";
+import { getDbClient } from "@/lib/supabase/admin";
 
-// In-memory state for offerings outcomes
 let currentOutcomes: Record<string, CourseOutcome[]> = {
   "o0000000-0000-0000-0000-000000000001": [...INITIAL_COS],
 };
@@ -12,7 +12,23 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const outcomes = currentOutcomes[id] || [...INITIAL_COS];
+  let outcomes = currentOutcomes[id] || [...INITIAL_COS];
+
+  try {
+    const db = await getDbClient();
+    const { data: dbOutcomes, error } = await db
+      .from("course_outcomes")
+      .select("*")
+      .order("sort_order", { ascending: true });
+
+    if (!error && dbOutcomes && dbOutcomes.length > 0) {
+      outcomes = dbOutcomes;
+      currentOutcomes[id] = dbOutcomes;
+    }
+  } catch {
+    // Fallback to memory
+  }
+
   return NextResponse.json({
     offering_id: id,
     count: outcomes.length,
@@ -36,7 +52,6 @@ export async function POST(
       );
     }
 
-    // Validate outcomes structure
     const seenCodes = new Set<string>();
     const sanitized: CourseOutcome[] = [];
 
@@ -64,6 +79,19 @@ export async function POST(
     }
 
     currentOutcomes[id] = sanitized;
+
+    // Persist to Supabase database
+    try {
+      const db = await getDbClient();
+      for (const co of sanitized) {
+        await db.from("course_outcomes").upsert({
+          course_id: co.course_id,
+          co_code: co.co_code,
+          description: co.description,
+          sort_order: co.sort_order,
+        }, { onConflict: "course_id,co_code" });
+      }
+    } catch {}
 
     return NextResponse.json({
       success: true,
