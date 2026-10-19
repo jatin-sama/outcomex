@@ -98,27 +98,46 @@ class Adapter60_40(BaseTemplateAdapter):
             "ta": "T",
         }
 
+        if student_marks_records is None:
+            raise ValueError("Cannot generate report: No student records provided for offering.")
+
         start_row = 29
+        cohort_size = len(student_marks_records)
         for i, student in enumerate(student_marks_records):
             r = start_row + i
             if r > 109:
                 break # Template accommodates 81 students in primary range
 
             # Roll No and Name
-            ws[f"A{r}"] = float(student["roll_no"]) if student["roll_no"].isdigit() else student["roll_no"]
-            ws[f"B{r}"] = student["student_name"]
+            roll_str = str(student.get("roll_no", "")).strip()
+            ws[f"A{r}"] = float(roll_str) if roll_str.isdigit() else roll_str
+            ws[f"B{r}"] = str(student.get("student_name", "")).strip()
 
             # Marks
             marks = student.get("marks", {})
             for comp_key, col_letter in comp_to_col.items():
                 val = marks.get(comp_key)
                 if val is not None:
-                    if isinstance(val, (int, float)):
+                    if isinstance(val, (int, float)) and not isinstance(val, bool):
                         ws[f"{col_letter}{r}"] = float(val)
+                    elif str(val).strip().upper() in ["A", "AB", "ABSENT"]:
+                        ws[f"{col_letter}{r}"] = str(val).strip().upper() if str(val).strip().upper() in ["A", "AB"] else "AB"
                     elif str(val).strip():
-                        ws[f"{col_letter}{r}"] = str(val).strip()
+                        try:
+                            ws[f"{col_letter}{r}"] = float(str(val).strip())
+                        except ValueError:
+                            ws[f"{col_letter}{r}"] = str(val).strip()
+                else:
+                    ws[f"{col_letter}{r}"] = None
 
-        # 3. Ensure Formulas and Static Summary Values
+        # 3. Clear leftover mock rows from the reference template
+        for r in range(start_row + cohort_size, 110):
+            for col in range(1, 27): # Columns A to Z
+                ws.cell(row=r, column=col).value = None
+            ws[f"AA{r}"].value = None
+            ws[f"AB{r}"].value = None
+
+        # 4. Ensure Formulas and Static Summary Values
         # In 60/40 template, PO row 21 values are verified
         if "po_results" in course_data:
             po_cols = {
@@ -168,6 +187,18 @@ class Adapter30_20(BaseTemplateAdapter):
 
         ws = wb[self.SHEET_NAME]
 
+        # 0. Populate Course Header Metadata
+        if "department" in course_data:
+            ws["O3"] = course_data["department"]
+        if "year_semester" in course_data:
+            ws["R3"] = f"Year / Semester :{course_data['year_semester']}"
+        if "course_name" in course_data:
+            ws["O4"] = course_data["course_name"]
+        if "course_code" in course_data:
+            ws["O5"] = course_data["course_code"]
+        if "academic_year" in course_data:
+            ws["R5"] = f"Year of Study : {course_data['academic_year']}"
+
         # 1. Header corrections
         # Fix ERR-03: Rename mislabeled headers G27/H27 & G94/H94 to CO3 and CO4
         ws["G27"] = "CO3"
@@ -181,6 +212,11 @@ class Adapter30_20(BaseTemplateAdapter):
         ws["AA4"] = '=IF($C$94="CO3",$C$98,IF($D$94="CO3",$D$98,IF($E$94="CO3",$E$98,"")))'
         ws["AB4"] = '=IF($C$94="CO4",$C$98,IF($D$94="CO4",$D$98,IF($E$94="CO4",$E$98,"")))'
 
+        ws["Y5"] = '=IF($G$94="CO1",$G$98,IF($H$94="CO1",$H$98,IF($I$94="CO1",$I$98,"")))'
+        ws["Z5"] = '=IF($G$94="CO2",$G$98,IF($H$94="CO2",$H$98,IF($I$94="CO2",$I$98,"")))'
+        ws["AA5"] = '=IF($G$94="CO3",$G$98,IF($H$94="CO3",$H$98,IF($I$94="CO3",$I$98,"")))'
+        ws["AB5"] = '=IF($G$94="CO4",$G$98,IF($H$94="CO4",$H$98,IF($I$94="CO4",$I$98,"")))'
+
         # 3. Fix ERR-01: Reconstruct broken #REF! formulas in ESE row 7 (Y7:AB7)
         # Endsem columns are K (CO1), L (CO2), M (CO3), N (CO4)
         ws["Y7"] = '=IF($K$94="CO1",$K$98,IF($L$94="CO1",$L$98,IF($M$94="CO1",$M$98,IF($N$94="CO1",$N$98,""))))'
@@ -189,6 +225,9 @@ class Adapter30_20(BaseTemplateAdapter):
         ws["AB7"] = '=IF($K$94="CO4",$K$98,IF($L$94="CO4",$L$98,IF($M$94="CO4",$M$98,IF($N$94="CO4",$N$98,""))))'
 
         # 4. Populate Student Data
+        if student_marks_records is None:
+            raise ValueError("Cannot generate report: No student records provided for offering.")
+
         comp_to_col = {
             "mt1_co1": "C",
             "mt1_co2": "D",
@@ -202,19 +241,38 @@ class Adapter30_20(BaseTemplateAdapter):
         }
 
         start_row = 29
+        cohort_size = len(student_marks_records)
         for i, student in enumerate(student_marks_records):
             r = start_row + i
             if r > 93:
                 break # Template accommodates 65 students in default range
 
-            ws[f"A{r}"] = float(student["roll_no"]) if student["roll_no"].isdigit() else student["roll_no"]
-            ws[f"B{r}"] = student["student_name"]
+            roll_str = str(student.get("roll_no", "")).strip()
+            ws[f"A{r}"] = float(roll_str) if roll_str.isdigit() else roll_str
+            ws[f"B{r}"] = str(student.get("student_name", "")).strip()
 
             marks = student.get("marks", {})
             for comp_key, col_letter in comp_to_col.items():
                 val = marks.get(comp_key)
-                if val is not None and isinstance(val, (int, float)):
-                    ws[f"{col_letter}{r}"] = float(val)
+                if val is not None:
+                    if isinstance(val, (int, float)) and not isinstance(val, bool):
+                        ws[f"{col_letter}{r}"] = float(val)
+                    elif str(val).strip().upper() in ["A", "AB", "ABSENT"]:
+                        ws[f"{col_letter}{r}"] = str(val).strip().upper() if str(val).strip().upper() in ["A", "AB"] else "AB"
+                    elif str(val).strip():
+                        try:
+                            ws[f"{col_letter}{r}"] = float(str(val).strip())
+                        except ValueError:
+                            ws[f"{col_letter}{r}"] = str(val).strip()
+                else:
+                    ws[f"{col_letter}{r}"] = None
+
+        # Clear unused rows in template from end of student records up to row 93
+        for r in range(start_row + cohort_size, 94):
+            for col in range(1, 27):
+                ws.cell(row=r, column=col).value = None
+            ws[f"AA{r}"].value = None
+            ws[f"AB{r}"].value = None
 
         wb.save(output_path)
         wb.close()
@@ -268,7 +326,16 @@ def load_reference_dataset(template_path=REFERENCE_WORKBOOK_PATH):
     return records
 
 
-def generate_workbook(scheme_type="60_40", course_data=None, student_records=None, output_path=None):
+def generate_workbook(scheme_type="60_40", course_data=None, student_records=None, output_path=None, allow_mock_fallback=False):
+    if scheme_type not in ["60_40", "60/40", "30_20", "30/20"]:
+        raise ValueError(f"Unknown scheme type: {scheme_type}")
+
+    if not student_records or len(student_records) == 0:
+        if allow_mock_fallback:
+            student_records = load_reference_dataset()
+        else:
+            raise ValueError("Cannot generate report: No student records provided for offering.")
+
     course_data = course_data or {
         "course_code": "25UCS623T",
         "course_name": "Introduction to Data Science",
@@ -276,17 +343,11 @@ def generate_workbook(scheme_type="60_40", course_data=None, student_records=Non
         "year_semester": "3rd yr/5th sem",
         "academic_year": "2025-26",
     }
-    
-    # If no student records provided, populate with complete 81 reference students
-    if not student_records:
-        student_records = load_reference_dataset()
 
     if scheme_type in ["60_40", "60/40"]:
         adapter = Adapter60_40()
-    elif scheme_type in ["30_20", "30/20"]:
-        adapter = Adapter30_20()
     else:
-        raise ValueError(f"Unknown scheme type: {scheme_type}")
+        adapter = Adapter30_20()
 
     return adapter.generate_report(course_data, student_records, output_path)
 
@@ -295,13 +356,19 @@ if __name__ == "__main__":
     payload_file = sys.argv[2] if len(sys.argv) > 2 else None
     out_file = sys.argv[3] if len(sys.argv) > 3 else None
 
-    c_data = None
-    s_records = None
-    if payload_file and os.path.exists(payload_file):
-        with open(payload_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            c_data = data.get("course_data")
-            s_records = data.get("student_records")
+    if not payload_file or not os.path.exists(payload_file):
+        sys.stderr.write("Error: A valid payload JSON file path is required.\n")
+        sys.exit(1)
 
-    res = generate_workbook(scheme, course_data=c_data, student_records=s_records, output_path=out_file)
+    with open(payload_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        c_data = data.get("course_data", {})
+        s_records = data.get("student_records", [])
+
+    if not s_records or len(s_records) == 0:
+        sys.stderr.write("Error: Payload contains no student records.\n")
+        sys.exit(1)
+
+    res = generate_workbook(scheme, course_data=c_data, student_records=s_records, output_path=out_file, allow_mock_fallback=False)
     print(json.dumps(res, indent=2))
+
