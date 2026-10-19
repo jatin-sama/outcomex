@@ -58,6 +58,13 @@ export async function generateExcelReport(
     throw new Error(`Worksheet '${sheetName}' not found in template workbook.`);
   }
 
+  // Remove all other sheets so the output workbook ONLY contains the requested sheet
+  // This guarantees no other sheets with mock students remain in the exported file
+  const sheetsToRemove = workbook.worksheets.filter((ws) => ws.name !== sheetName);
+  for (const s of sheetsToRemove) {
+    workbook.removeWorksheet(s.id);
+  }
+
   // 1. Populate Course Header Metadata
   if (courseData.department) {
     worksheet.getCell("O3").value = courseData.department;

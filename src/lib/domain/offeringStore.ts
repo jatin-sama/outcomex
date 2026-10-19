@@ -195,8 +195,8 @@ class OfferingDomainStore {
     const courseName = String(input.course_name).trim();
     const courseId = toValidUuid(`c-${Date.now()}`, courseCode);
     const offeringId = toValidUuid(`o-${Date.now()}`, courseCode);
-    const deptId = "d0000000-0000-0000-0000-000000000001";
-    const ayId = "a0000000-0000-0000-0000-000000000001";
+    let deptId = "d0000000-0000-0000-0000-000000000001";
+    let ayId = "a0000000-0000-0000-0000-000000000001";
     const schemeId = input.attainment_scheme_id || "s0000000-0000-0000-0000-000000000001";
     const schemeName = schemeId.includes("2") ? "Autonomous 30/20 Scheme" : "Autonomous 60/40 Scheme";
 
@@ -227,7 +227,12 @@ class OfferingDomainStore {
     // Attempt DB insert
     try {
       const db = await getDbClient();
-      await db.from("courses").insert({
+      const { data: depts } = await db.from("departments").select("id").limit(1);
+      if (depts && depts.length > 0) deptId = depts[0].id;
+      const { data: ays } = await db.from("academic_years").select("id").limit(1);
+      if (ays && ays.length > 0) ayId = ays[0].id;
+
+      const { error: cErr } = await db.from("courses").insert({
         id: courseId,
         department_id: deptId,
         course_code: courseCode,
@@ -235,15 +240,19 @@ class OfferingDomainStore {
         semester: newCourseObj.semester,
         year_of_study: newCourseObj.year_of_study,
       });
+      if (cErr) console.warn("Supabase course insert notice:", cErr.message);
 
-      await db.from("course_offerings").insert({
+      const { error: oErr } = await db.from("course_offerings").insert({
         id: offeringId,
         course_id: courseId,
         academic_year_id: ayId,
         section: newCourseObj.offering.section,
         attainment_scheme_id: schemeId,
       });
-    } catch {}
+      if (oErr) console.warn("Supabase offering insert notice:", oErr.message);
+    } catch (e: any) {
+      console.warn("Supabase connect notice:", e.message);
+    }
 
     this.courses.unshift(newCourseObj);
     this.offerings.set(offeringId, newCourseObj.offering);
@@ -621,26 +630,51 @@ class OfferingDomainStore {
   }
 
   /**
+   * Clear all students and marks for an offering.
+   */
+  async clearRoster(offeringId: string): Promise<boolean> {
+    const resolvedId = this.resolveOfferingId(offeringId);
+    this.rosters.set(resolvedId, []);
+    this.marks.set(resolvedId, []);
+
+    try {
+      const db = await getDbClient();
+      const validOfferingUuid = toValidUuid(resolvedId);
+      await db
+        .from("enrollments")
+        .delete()
+        .eq("course_offering_id", validOfferingUuid);
+    } catch {}
+
+    return true;
+  }
+
+  /**
    * Delete student from roster and marks
    */
-  async deleteStudent(offeringId: string, rollNo: string): Promise<boolean> {
-    const roster = await this.getRoster(offeringId);
-    const filteredRoster = roster.filter((s) => String(s.roll_no).trim() !== String(rollNo).trim());
-    this.rosters.set(offeringId, filteredRoster);
+  async deleteStudent(offeringId: string, rollNoOrId: string): Promise<boolean> {
+    const resolvedId = this.resolveOfferingId(offeringId);
+    const roster = await this.getRoster(resolvedId);
+    const filteredRoster = roster.filter(
+      (s) => String(s.roll_no).trim() !== String(rollNoOrId).trim() && s.id !== rollNoOrId
+    );
+    this.rosters.set(resolvedId, filteredRoster);
 
-    const marks = this.marks.get(offeringId) || [];
-    const filteredMarks = marks.filter((m) => String(m.roll_no).trim() !== String(rollNo).trim());
-    this.marks.set(offeringId, filteredMarks);
+    const marks = this.marks.get(resolvedId) || [];
+    const filteredMarks = marks.filter(
+      (m) => String(m.roll_no).trim() !== String(rollNoOrId).trim() && m.student_id !== rollNoOrId
+    );
+    this.marks.set(resolvedId, filteredMarks);
 
     // Delete in DB if reachable
     try {
       const db = await getDbClient();
-      const validOfferingUuid = toValidUuid(offeringId);
+      const validOfferingUuid = toValidUuid(resolvedId);
       await db
         .from("enrollments")
         .delete()
         .eq("course_offering_id", validOfferingUuid)
-        .eq("roll_no", rollNo);
+        .or(`roll_no.eq.${rollNoOrId},id.eq.${rollNoOrId}`);
     } catch {}
 
     return true;

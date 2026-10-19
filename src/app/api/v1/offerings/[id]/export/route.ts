@@ -207,29 +207,32 @@ export async function POST(
     }
 
     // B. Query actual enrolled student roster
-    const roster = await offeringStore.getRoster(id);
-    if (!roster || roster.length === 0) {
-      return NextResponse.json(
-        { error: "Cannot generate report: Offering has no enrolled students. Please enroll students in the roster first." },
-        { status: 400 }
-      );
+    let studentRecords = body.studentRecords;
+    if (!studentRecords || !Array.isArray(studentRecords) || studentRecords.length === 0) {
+      const roster = await offeringStore.getRoster(id);
+      if (!roster || roster.length === 0) {
+        return NextResponse.json(
+          { error: "Cannot generate report: Offering has no enrolled students. Please enroll students in the roster first." },
+          { status: 400 }
+        );
+      }
+
+      // C. Query persisted marks for the enrolled students
+      const { marks } = await offeringStore.getMarks(id);
+
+      // Build real student records matching only enrolled students
+      studentRecords = roster.map((student) => {
+        const stMark = marks.find(
+          (m) => String(m.roll_no).trim().toLowerCase() === String(student.roll_no).trim().toLowerCase()
+        );
+        return {
+          student_id: student.id,
+          roll_no: student.roll_no,
+          student_name: student.student_name,
+          marks: (stMark?.marks || {}) as Record<string, any>,
+        };
+      });
     }
-
-    // C. Query persisted marks for the enrolled students
-    const { marks } = await offeringStore.getMarks(id);
-
-    // Build real student records matching only enrolled students
-    const studentRecords = roster.map((student) => {
-      const stMark = marks.find(
-        (m) => String(m.roll_no).trim().toLowerCase() === String(student.roll_no).trim().toLowerCase()
-      );
-      return {
-        student_id: student.id,
-        roll_no: student.roll_no,
-        student_name: student.student_name,
-        marks: (stMark?.marks || {}) as Record<string, any>,
-      };
-    });
 
     // D. Calculate attainment results using approved engine
     const engine = new AttainmentEngine(schemeOverrides);

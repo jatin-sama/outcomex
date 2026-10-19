@@ -56,6 +56,19 @@ export default function MarksPage() {
       .then((data) => {
         if (data?.courses && Array.isArray(data.courses) && data.courses.length > 0) {
           setCourses(data.courses);
+          const stored = typeof window !== "undefined" ? localStorage.getItem("outcomeX_active_offering_id") : null;
+          const param = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("offeringId") : null;
+          const activeId = param || stored;
+          const exists = activeId && data.courses.some((c: any) => (c.offering?.id || c.id) === activeId);
+          if (!exists) {
+            const firstOffId = data.courses[0].offering?.id || data.courses[0].id;
+            if (firstOffId) {
+              setOfferingId(firstOffId);
+              if (typeof window !== "undefined") {
+                localStorage.setItem("outcomeX_active_offering_id", firstOffId);
+              }
+            }
+          }
         }
       })
       .catch(() => {});

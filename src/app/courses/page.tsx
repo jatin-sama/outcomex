@@ -23,7 +23,7 @@ const DEFAULT_COURSES = [
   {
     ...INITIAL_COURSE,
     offering: INITIAL_OFFERING,
-    studentsCount: 81,
+    studentsCount: 0,
     cosCount: 6,
     schemeName: "Autonomous 60/40 Scheme",
   },

@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { REFERENCE_STUDENTS } from "@/lib/data/referenceStudents";
 
 export async function POST(
   request: NextRequest,

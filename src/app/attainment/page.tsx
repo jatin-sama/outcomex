@@ -32,15 +32,31 @@ export default function AttainmentPage() {
   const [selectedPO, setSelectedPO] = useState<POAttainmentResult | null>(null);
   const [searchStudent, setSearchStudent] = useState("");
 
-  // Sync offeringId from URL or localStorage
+  // Load courses and sync active offeringId
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const param = new URLSearchParams(window.location.search).get("offeringId");
-      const stored = localStorage.getItem("outcomeX_active_offering_id");
-      const active = param || stored || INITIAL_OFFERING.id;
-      setOfferingId(active);
-      localStorage.setItem("outcomeX_active_offering_id", active);
-    }
+    fetch("/api/v1/courses")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((courseData) => {
+        if (courseData?.courses && Array.isArray(courseData.courses) && courseData.courses.length > 0) {
+          const stored = typeof window !== "undefined" ? localStorage.getItem("outcomeX_active_offering_id") : null;
+          const param = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("offeringId") : null;
+          const activeId = param || stored;
+          const exists = activeId && courseData.courses.some((c: any) => (c.offering?.id || c.id) === activeId);
+          const targetId = exists ? activeId : (courseData.courses[0].offering?.id || courseData.courses[0].id);
+          if (targetId) {
+            setOfferingId(targetId);
+            if (typeof window !== "undefined") {
+              localStorage.setItem("outcomeX_active_offering_id", targetId);
+            }
+            fetchCalculation(targetId);
+          }
+        } else {
+          fetchCalculation();
+        }
+      })
+      .catch(() => {
+        fetchCalculation();
+      });
   }, []);
 
   const fetchCalculation = async (activeId?: string) => {

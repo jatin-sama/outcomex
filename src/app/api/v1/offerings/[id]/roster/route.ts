@@ -137,6 +137,16 @@ export async function DELETE(
   const { id } = await params;
   const searchParams = request.nextUrl.searchParams;
   const studentId = searchParams.get("student_id");
+  const clearAll = searchParams.get("all") === "true" || searchParams.get("clear_all") === "true";
+
+  if (clearAll) {
+    await offeringStore.clearRoster(id);
+    return NextResponse.json({
+      success: true,
+      cleared: true,
+      remaining_count: 0,
+    });
+  }
 
   if (!studentId) {
     return NextResponse.json({ error: "student_id query param is required." }, { status: 400 });

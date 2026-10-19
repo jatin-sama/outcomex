@@ -86,6 +86,36 @@ export default function CourseSetupPage() {
         }
       }
     } catch {}
+
+    // Fetch from API to ensure cross-device consistency
+    if (offeringId) {
+      fetch(`/api/v1/offerings/${offeringId}/outcomes`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.outcomes && Array.isArray(data.outcomes) && data.outcomes.length > 0) {
+            setCos(data.outcomes);
+          }
+        })
+        .catch(() => {});
+
+      fetch(`/api/v1/offerings/${offeringId}/mappings`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.mappings && typeof data.mappings === "object" && Object.keys(data.mappings).length > 0) {
+            setMappings(data.mappings);
+          }
+        })
+        .catch(() => {});
+
+      fetch(`/api/v1/offerings/${offeringId}/assessments`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.components && Array.isArray(data.components) && data.components.length > 0) {
+            setAssessments(data.components);
+          }
+        })
+        .catch(() => {});
+    }
   }, [offeringId]);
 
   // Auto-clear notification after 4s

@@ -18,7 +18,7 @@ import {
   Clock,
   ArrowLeft,
 } from "lucide-react";
-import { REFERENCE_STUDENTS, ReferenceStudent } from "@/lib/data/referenceStudents";
+import { ReferenceStudent } from "@/lib/data/referenceStudents";
 import { INITIAL_OFFERING, INITIAL_COURSE } from "@/lib/data/initialData";
 
 export default function StudentRosterPage() {
@@ -33,6 +33,19 @@ export default function StudentRosterPage() {
       .then((data) => {
         if (data?.courses && Array.isArray(data.courses) && data.courses.length > 0) {
           setCourses(data.courses);
+          const stored = typeof window !== "undefined" ? localStorage.getItem("outcomeX_active_offering_id") : null;
+          const param = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("offeringId") : null;
+          const activeId = param || stored;
+          const exists = activeId && data.courses.some((c: any) => (c.offering?.id || c.id) === activeId);
+          if (!exists) {
+            const firstOffId = data.courses[0].offering?.id || data.courses[0].id;
+            if (firstOffId) {
+              setOfferingId(firstOffId);
+              if (typeof window !== "undefined") {
+                localStorage.setItem("outcomeX_active_offering_id", firstOffId);
+              }
+            }
+          }
         }
       })
       .catch(() => {});
@@ -83,30 +96,29 @@ export default function StudentRosterPage() {
     loadRoster(newOfferingId);
   };
 
-  const handleQuickSeed = async () => {
+  const handleClearRoster = async () => {
+    if (!window.confirm("Are you sure you want to clear all students from this offering? This will erase all enrolled students and any entered marks.")) {
+      return;
+    }
     try {
-      const studentsToImport = REFERENCE_STUDENTS.map((s) => ({
-        roll_no: s.roll_no,
-        student_name: s.student_name,
-        status: s.status,
-      }));
-      const res = await fetch(`/api/v1/offerings/${offeringId}/roster`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ students: studentsToImport }),
+      const res = await fetch(`/api/v1/offerings/${offeringId}/roster?all=true`, {
+        method: "DELETE",
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to seed cohort");
-
-      loadRoster(offeringId);
+      if (!res.ok) throw new Error("Failed to clear roster");
+      setRoster([]);
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("outcomeX_roster");
+        localStorage.removeItem("outcomeX_marks");
+      }
       setNotification({
         type: "success",
-        text: `Enrolled ${data.added_count || 81} students successfully into this offering!`,
+        text: "Course roster cleared successfully. All mock and enrolled data removed.",
       });
     } catch (err: any) {
       setNotification({ type: "error", text: err.message });
     }
   };
+
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -320,13 +332,13 @@ export default function StudentRosterPage() {
                 </div>
               )}
 
-              {roster.length === 0 && (
+              {roster.length > 0 && (
                 <button
-                  onClick={handleQuickSeed}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 px-3.5 py-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900 transition-colors"
+                  onClick={handleClearRoster}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/60 px-3.5 py-2 text-xs font-semibold text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900 transition-colors"
                 >
-                  <UserCheck className="h-4 w-4" />
-                  Seed Cohort (81)
+                  <Trash2 className="h-4 w-4" />
+                  Clear Roster ({roster.length})
                 </button>
               )}
 
@@ -490,27 +502,20 @@ export default function StudentRosterPage() {
                     No Students Enrolled in this Course Offering
                   </h3>
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
-                    Get started by loading the standard college reference cohort, adding students manually, or pasting a student roster list from Excel.
+                    Get started by adding students manually or pasting your student roster list from Excel or CSV.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
                   <button
-                    onClick={handleQuickSeed}
-                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-xs hover:bg-emerald-500 transition-colors"
-                  >
-                    <UserCheck className="h-4 w-4" />
-                    Seed Reference Cohort (81 Students)
-                  </button>
-                  <button
                     onClick={() => setIsAddModalOpen(true)}
-                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700"
+                    className="inline-flex items-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 px-5 py-2.5 text-xs font-semibold text-white shadow-xs transition-colors"
                   >
                     <Plus className="h-4 w-4" />
                     Add Single Student
                   </button>
                   <button
                     onClick={() => setIsBulkModalOpen(true)}
-                    className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-xs font-semibold text-white shadow-xs hover:bg-sky-500 transition-colors"
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700"
                   >
                     <Upload className="h-4 w-4" />
                     Paste Roster from Excel
