@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { execFile } from "child_process";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
@@ -282,47 +281,22 @@ export async function POST(
       fs.mkdirSync(exportsDir, { recursive: true });
     }
 
-    const scriptPath = path.join(process.cwd(), "scripts", "excel_generator.py");
     const sanitizedCourseCode = courseCode.replace(/[^a-zA-Z0-9_-]/g, "_");
     const filename = `OutcomeX_Report_${schemeType}_${sanitizedCourseCode}_${Date.now()}.xlsx`;
     const outputPath = path.join(exportsDir, filename);
 
-    // Write real payload JSON for Python adapter
-    const tempPayloadPath = path.join(exportsDir, `payload_${sanitizedCourseCode}_${Date.now()}.json`);
-    fs.writeFileSync(
-      tempPayloadPath,
-      JSON.stringify({
-        course_data: courseData,
-        student_records: studentRecords,
-      }),
-      "utf-8"
-    );
-
-    // Call Python openpyxl adapter with real payload
+    // Call pure TypeScript ExcelJS generator (compatible with Vercel serverless Linux, Windows, macOS)
+    const { generateExcelReport } = await import("@/lib/excel/excelGenerator");
     try {
-      await new Promise<void>((resolve, reject) => {
-        execFile(
-          process.platform === "win32" ? "python" : "python3",
-          [scriptPath, schemeType, tempPayloadPath, outputPath],
-          { cwd: process.cwd() },
-          (error, stdout, stderr) => {
-            try {
-              if (fs.existsSync(tempPayloadPath)) fs.unlinkSync(tempPayloadPath);
-            } catch {}
-            if (error) {
-              reject(new Error(stderr || stdout || error.message));
-            } else {
-              resolve();
-            }
-          }
-        );
-      });
-    } catch (pythonError: any) {
-      try {
-        if (fs.existsSync(tempPayloadPath)) fs.unlinkSync(tempPayloadPath);
-      } catch {}
+      await generateExcelReport(
+        schemeType,
+        courseData,
+        studentRecords,
+        outputPath
+      );
+    } catch (genErr: any) {
       return NextResponse.json(
-        { error: `Excel generation failed: ${pythonError.message}` },
+        { error: `Excel generation failed: ${genErr.message}` },
         { status: 500 }
       );
     }

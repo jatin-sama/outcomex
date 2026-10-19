@@ -32,18 +32,37 @@ const DEFAULT_COURSES = [
 export default function CoursesPage() {
   const [courses, setCourses] = useState(DEFAULT_COURSES);
   const [loading, setLoading] = useState(false);
+  const [activeOfferingId, setActiveOfferingId] = useState<string>("");
 
-  // Load courses from Supabase database via API
-  React.useEffect(() => {
+  const refreshCourses = () => {
     fetch("/api/v1/courses")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.courses && Array.isArray(data.courses) && data.courses.length > 0) {
           setCourses(data.courses);
+          const stored = localStorage.getItem("outcomeX_active_offering_id");
+          if (stored) {
+            setActiveOfferingId(stored);
+          } else if (data.courses[0]?.offering?.id) {
+            setActiveOfferingId(data.courses[0].offering.id);
+            localStorage.setItem("outcomeX_active_offering_id", data.courses[0].offering.id);
+          }
         }
       })
       .catch(() => {});
+  };
+
+  // Load courses from Supabase database via API
+  React.useEffect(() => {
+    refreshCourses();
+    const stored = localStorage.getItem("outcomeX_active_offering_id");
+    if (stored) setActiveOfferingId(stored);
   }, []);
+
+  const handleSetActive = (offeringId: string) => {
+    setActiveOfferingId(offeringId);
+    localStorage.setItem("outcomeX_active_offering_id", offeringId);
+  };
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newCode, setNewCode] = useState("");
@@ -75,22 +94,9 @@ export default function CoursesPage() {
       const data = await res.json();
       if (data?.course) {
         setCourses((prev) => [data.course, ...prev]);
-      } else {
-        // Fallback local append if backend returns without course object
-        const fallbackObj = {
-          id: `c-${Date.now()}`,
-          department_id: "d0000000-0000-0000-0000-000000000001",
-          course_code: newCode.trim().toUpperCase(),
-          course_name: newName.trim(),
-          semester: newSemester,
-          year_of_study: newYear,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          studentsCount: 0,
-          cosCount: 4,
-          schemeName: selectedScheme.scheme_name,
-        };
-        setCourses((prev) => [fallbackObj as any, ...prev]);
+        if (data.course.offering?.id) {
+          handleSetActive(data.course.offering.id);
+        }
       }
     } catch {
       // Offline fallback
@@ -99,6 +105,7 @@ export default function CoursesPage() {
       setIsModalOpen(false);
       setNewCode("");
       setNewName("");
+      refreshCourses();
     }
   };
 
@@ -149,75 +156,111 @@ export default function CoursesPage() {
 
           {/* Courses List */}
           <div className="grid grid-cols-1 gap-4">
-            {courses.map((course) => (
-              <div
-                key={course.id}
-                className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xs hover:border-sky-300 dark:hover:border-sky-800 transition-all"
-              >
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-lg bg-sky-100 dark:bg-sky-950/80 px-2.5 py-1 font-mono text-xs font-bold text-sky-700 dark:text-sky-300">
-                        {course.course_code}
-                      </span>
-                      <span className="rounded-lg bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-xs text-slate-600 dark:text-slate-300">
-                        {course.semester} • {course.year_of_study}
-                      </span>
-                      <span className="rounded-lg bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60">
-                        Section {course.offering?.section || "A"}
-                      </span>
+            {courses.map((course) => {
+              const offeringId = course.offering?.id || course.id;
+              const isActive = activeOfferingId === offeringId;
+
+              return (
+                <div
+                  key={course.id}
+                  className={`rounded-2xl border p-6 transition-all ${
+                    isActive
+                      ? "border-sky-500 dark:border-sky-500 bg-white dark:bg-slate-900 shadow-md ring-1 ring-sky-500/30"
+                      : "border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs hover:border-slate-300 dark:hover:border-slate-700"
+                  }`}
+                >
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-lg bg-sky-100 dark:bg-sky-950/80 px-2.5 py-1 font-mono text-xs font-bold text-sky-700 dark:text-sky-300">
+                          {course.course_code}
+                        </span>
+                        <span className="rounded-lg bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-xs text-slate-600 dark:text-slate-300">
+                          {course.semester} • {course.year_of_study}
+                        </span>
+                        <span className="rounded-lg bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60">
+                          Section {course.offering?.section || "A"}
+                        </span>
+                        {isActive ? (
+                          <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 text-white px-2.5 py-0.5 text-[11px] font-bold shadow-xs">
+                            <CheckCircle2 className="h-3 w-3" />
+                            Active Offering
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleSetActive(offeringId)}
+                            className="rounded-lg border border-slate-300 dark:border-slate-700 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                          >
+                            Set as Active
+                          </button>
+                        )}
+                      </div>
+
+                      <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+                        {course.course_name}
+                      </h2>
+
+                      <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 dark:text-slate-400 pt-1">
+                        <div className="flex items-center gap-1.5">
+                          <Users className="h-4 w-4 text-slate-400" />
+                          <span className={course.studentsCount > 0 ? "font-semibold text-slate-800 dark:text-slate-200" : "text-amber-600 dark:text-amber-400 font-semibold"}>
+                            {course.studentsCount} Students Enrolled
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Layers className="h-4 w-4 text-slate-400" />
+                          <span>{course.cosCount} Course Outcomes</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Award className="h-4 w-4 text-slate-400" />
+                          <span>Scheme: {course.schemeName}</span>
+                        </div>
+                      </div>
                     </div>
 
-                    <h2 className="text-xl font-bold text-slate-900 dark:text-white">
-                      {course.course_name}
-                    </h2>
+                    {/* Actions */}
+                    <div className="flex flex-wrap items-center gap-2 self-start md:self-center">
+                      <Link
+                        href={`/courses/${offeringId}/setup`}
+                        onClick={() => handleSetActive(offeringId)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        <Settings className="h-3.5 w-3.5" />
+                        COs & Scheme
+                      </Link>
 
-                    <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 dark:text-slate-400 pt-1">
-                      <div className="flex items-center gap-1.5">
-                        <Users className="h-4 w-4 text-slate-400" />
-                        <span>{course.studentsCount} Students Enrolled</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Layers className="h-4 w-4 text-slate-400" />
-                        <span>{course.cosCount} Course Outcomes</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Award className="h-4 w-4 text-slate-400" />
-                        <span>Scheme: {course.schemeName}</span>
-                      </div>
+                      <Link
+                        href={`/roster?offeringId=${offeringId}`}
+                        onClick={() => handleSetActive(offeringId)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        <Users className="h-3.5 w-3.5" />
+                        Roster ({course.studentsCount})
+                      </Link>
+
+                      <Link
+                        href={`/marks?offeringId=${offeringId}`}
+                        onClick={() => handleSetActive(offeringId)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        Marks Entry
+                      </Link>
+
+                      <Link
+                        href={`/reports?offeringId=${offeringId}`}
+                        onClick={() => handleSetActive(offeringId)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-sky-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-sky-500 transition-colors"
+                      >
+                        <span>Export Report</span>
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Link>
                     </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex flex-wrap items-center gap-2.5 self-start md:self-center">
-                    <Link
-                      href={`/courses/${course.offering?.id || course.id}/setup`}
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-                    >
-                      <Settings className="h-3.5 w-3.5" />
-                      Configure COs & Scheme
-                    </Link>
-
-                    <Link
-                      href={`/roster?offeringId=${course.offering?.id || course.id}`}
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-                    >
-                      <Users className="h-3.5 w-3.5" />
-                      Manage Roster ({course.studentsCount})
-                    </Link>
-
-                    <Link
-                      href={`/?offeringId=${course.offering?.id || course.id}`}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-sky-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-sky-500 transition-colors"
-                    >
-                      <span>Open Offering</span>
-                      <ChevronRight className="h-3.5 w-3.5" />
-                    </Link>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
+
 
           {/* New Course Modal */}
           {isModalOpen && (

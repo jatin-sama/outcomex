@@ -18,6 +18,7 @@ import {
   Sparkles,
   Check,
   FileCheck,
+  Users,
 } from "lucide-react";
 import { REFERENCE_MARKS, StudentMarksRecord } from "@/lib/data/referenceMarks";
 import { INITIAL_OFFERING, INITIAL_COURSE } from "@/lib/data/initialData";
@@ -41,11 +42,24 @@ const ASSESSMENT_COLS = [
 
 export default function MarksPage() {
   const [offeringId, setOfferingId] = useState<string>(INITIAL_OFFERING.id);
+  const [courses, setCourses] = useState<any[]>([]);
 
   const [mode, setMode] = useState<"editor" | "import">("editor");
 
   // Grid State
   const [marksData, setMarksData] = useState<StudentMarksRecord[]>([]);
+
+  // Load courses for offering selector
+  useEffect(() => {
+    fetch("/api/v1/courses")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.courses && Array.isArray(data.courses) && data.courses.length > 0) {
+          setCourses(data.courses);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Sync offeringId from URL or localStorage
   useEffect(() => {
@@ -58,10 +72,9 @@ export default function MarksPage() {
     }
   }, []);
 
-  // Load marks from canonical store / database via API
-  useEffect(() => {
-    if (!offeringId) return;
-    fetch(`/api/v1/offerings/${offeringId}/marks`)
+  const loadMarks = (targetOfferingId: string) => {
+    if (!targetOfferingId) return;
+    fetch(`/api/v1/offerings/${targetOfferingId}/marks`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.marks && Array.isArray(data.marks)) {
@@ -69,7 +82,30 @@ export default function MarksPage() {
         }
       })
       .catch(() => {});
+  };
+
+  // Load marks from canonical store / database via API
+  useEffect(() => {
+    loadMarks(offeringId);
   }, [offeringId]);
+
+  const currentCourse = courses.find((c) => (c.offering?.id || c.id) === offeringId) || {
+    course_code: INITIAL_COURSE.course_code,
+    course_name: INITIAL_COURSE.course_name,
+    offering: INITIAL_OFFERING,
+  };
+
+  const handleSelectOffering = (newOfferingId: string) => {
+    setOfferingId(newOfferingId);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("outcomeX_active_offering_id", newOfferingId);
+      const url = new URL(window.location.href);
+      url.searchParams.set("offeringId", newOfferingId);
+      window.history.replaceState({}, "", url.toString());
+    }
+    loadMarks(newOfferingId);
+  };
+
 
   const [searchQuery, setSearchQuery] = useState("");
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -285,12 +321,42 @@ export default function MarksPage() {
               <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
                 Student Marks Gradebook
               </h1>
-              <p className="mt-0.5 text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                {INITIAL_COURSE.course_code} • {INITIAL_COURSE.course_name} ({marksData.length} Enrolled Students)
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-mono font-bold text-sky-700 dark:text-sky-300 bg-sky-100 dark:bg-sky-950/80 px-2.5 py-0.5 rounded-lg">
+                  {currentCourse.course_code}
+                </span>
+                <span className="text-xs text-slate-700 dark:text-slate-200 font-bold">
+                  {currentCourse.course_name}
+                </span>
+                <span className="text-slate-400">•</span>
+                <span className="text-xs text-slate-500">
+                  {marksData.length} Enrolled Students (Sec {currentCourse.offering?.section || "A"})
+                </span>
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-3">
+              {/* Offering Selector Dropdown */}
+              {courses.length > 0 && (
+                <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs shadow-xs">
+                  <span className="font-semibold text-slate-500">Course:</span>
+                  <select
+                    value={offeringId}
+                    onChange={(e) => handleSelectOffering(e.target.value)}
+                    className="bg-transparent font-bold text-slate-900 dark:text-white focus:outline-none cursor-pointer"
+                  >
+                    {courses.map((c) => {
+                      const offId = c.offering?.id || c.id;
+                      return (
+                        <option key={offId} value={offId} className="dark:bg-slate-900">
+                          {c.course_code} - {c.course_name} (Sec {c.offering?.section || "A"})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+
               <Link
                 href={`/roster?offeringId=${offeringId}`}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
@@ -311,6 +377,7 @@ export default function MarksPage() {
                   <FileSpreadsheet className="h-4 w-4" />
                   Spreadsheet Editor
                 </button>
+
 
                 <button
                   onClick={() => setMode("import")}
@@ -454,6 +521,31 @@ export default function MarksPage() {
                   </table>
                 </div>
               </div>
+
+              {marksData.length === 0 && (
+                <div className="rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800 p-12 text-center space-y-4 bg-white/60 dark:bg-slate-900/60 mt-4">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 dark:bg-sky-950/80 text-sky-600 dark:text-sky-400">
+                    <FileSpreadsheet className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      No Students Enrolled in this Course Offering
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+                      The gradebook is driven by the student roster. Enroll students in Student Roster to start entering assessment marks.
+                    </p>
+                  </div>
+                  <div className="pt-2">
+                    <Link
+                      href={`/roster?offeringId=${offeringId}`}
+                      className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-xs font-semibold text-white shadow-xs hover:bg-sky-500 transition-colors"
+                    >
+                      <Users className="h-4 w-4" />
+                      Open Student Roster to Enroll Students
+                    </Link>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

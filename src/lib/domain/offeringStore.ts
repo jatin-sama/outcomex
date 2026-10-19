@@ -34,11 +34,223 @@ class OfferingDomainStore {
   private rosters: Map<string, ReferenceStudent[]> = new Map();
   private marks: Map<string, StudentMarksRecord[]> = new Map();
   private assessments: Map<string, any[]> = new Map();
+  private courses: any[] = [];
+  private offerings: Map<string, any> = new Map();
 
   constructor() {
     this.rosters.set(DEFAULT_OFFERING_ID, []);
     this.marks.set(DEFAULT_OFFERING_ID, []);
     this.assessments.set(DEFAULT_OFFERING_ID, JSON.parse(JSON.stringify(INITIAL_ASSESSMENTS)));
+
+    const defaultOffering = {
+      id: INITIAL_OFFERING.id,
+      course_id: INITIAL_COURSE.id,
+      academic_year_id: INITIAL_OFFERING.academic_year_id,
+      teacher_id: INITIAL_OFFERING.teacher_id,
+      section: INITIAL_OFFERING.section,
+      attainment_scheme_id: INITIAL_OFFERING.attainment_scheme_id,
+      created_at: INITIAL_OFFERING.created_at,
+      updated_at: INITIAL_OFFERING.updated_at,
+    };
+
+    this.courses = [
+      {
+        id: INITIAL_COURSE.id,
+        department_id: INITIAL_COURSE.department_id,
+        course_code: INITIAL_COURSE.course_code,
+        course_name: INITIAL_COURSE.course_name,
+        semester: INITIAL_COURSE.semester,
+        year_of_study: INITIAL_COURSE.year_of_study,
+        created_at: INITIAL_COURSE.created_at,
+        updated_at: INITIAL_COURSE.updated_at,
+        schemeName: "Autonomous 60/40 Scheme",
+        cosCount: 6,
+        offering: defaultOffering,
+      },
+    ];
+    this.offerings.set(DEFAULT_OFFERING_ID, defaultOffering);
+  }
+
+  /**
+   * Resolves an ID to a course offering ID.
+   * If a course ID was passed by mistake, resolves to that course's offering ID.
+   */
+  resolveOfferingId(idOrOfferingId: string): string {
+    if (!idOrOfferingId) return DEFAULT_OFFERING_ID;
+    if (this.offerings.has(idOrOfferingId)) return idOrOfferingId;
+    const match = this.courses.find((c) => c.id === idOrOfferingId || c.offering?.id === idOrOfferingId);
+    if (match?.offering?.id) return match.offering.id;
+    return idOrOfferingId;
+  }
+
+  /**
+   * Get all courses with their offerings and actual enrolled students count.
+   */
+  async getCourses(): Promise<any[]> {
+    try {
+      const db = await getDbClient();
+      const { data: dbCourses, error } = await db
+        .from("courses")
+        .select(`
+          id,
+          department_id,
+          course_code,
+          course_name,
+          semester,
+          year_of_study,
+          created_at,
+          updated_at,
+          course_offerings (
+            id,
+            academic_year_id,
+            teacher_id,
+            section,
+            attainment_scheme_id,
+            created_at,
+            updated_at
+          )
+        `)
+        .order("created_at", { ascending: false });
+
+      if (!error && dbCourses && dbCourses.length > 0) {
+        const dbCourseCodes = new Set(dbCourses.map((c: any) => c.course_code));
+        const formattedDb = await Promise.all(
+          dbCourses.map(async (c: any) => {
+            let offering = Array.isArray(c.course_offerings) ? c.course_offerings[0] : c.course_offerings;
+            if (!offering) {
+              const offId = toValidUuid(`o-${c.id}`, c.id);
+              offering = {
+                id: offId,
+                course_id: c.id,
+                academic_year_id: "a0000000-0000-0000-0000-000000000001",
+                teacher_id: "u0000000-0000-0000-0000-000000000001",
+                section: "A",
+                attainment_scheme_id: "s0000000-0000-0000-0000-000000000001",
+                created_at: c.created_at,
+                updated_at: c.updated_at,
+              };
+            }
+            this.offerings.set(offering.id, offering);
+            const roster = await this.getRoster(offering.id);
+            const schemeName = offering.attainment_scheme_id?.includes("2")
+              ? "Autonomous 30/20 Scheme"
+              : "Autonomous 60/40 Scheme";
+
+            return {
+              id: c.id,
+              department_id: c.department_id,
+              course_code: c.course_code,
+              course_name: c.course_name,
+              semester: c.semester,
+              year_of_study: c.year_of_study,
+              created_at: c.created_at,
+              updated_at: c.updated_at,
+              studentsCount: roster.length,
+              cosCount: offering.attainment_scheme_id?.includes("2") ? 4 : 6,
+              schemeName,
+              offering,
+            };
+          })
+        );
+
+        // Include any memory-stored courses created during session
+        for (const mc of this.courses) {
+          if (!dbCourseCodes.has(mc.course_code)) {
+            const roster = await this.getRoster(mc.offering.id);
+            formattedDb.push({
+              ...mc,
+              studentsCount: roster.length,
+            });
+          }
+        }
+
+        return formattedDb;
+      }
+    } catch {}
+
+    // Memory store fallback
+    return await Promise.all(
+      this.courses.map(async (c) => {
+        const roster = await this.getRoster(c.offering.id);
+        return {
+          ...c,
+          studentsCount: roster.length,
+        };
+      })
+    );
+  }
+
+  /**
+   * Create a new course and guarantee its associated course offering.
+   */
+  async createCourse(input: {
+    course_code: string;
+    course_name: string;
+    semester?: string;
+    year_of_study?: string;
+    attainment_scheme_id?: string;
+    section?: string;
+  }): Promise<any> {
+    const courseCode = String(input.course_code).trim().toUpperCase();
+    const courseName = String(input.course_name).trim();
+    const courseId = toValidUuid(`c-${Date.now()}`, courseCode);
+    const offeringId = toValidUuid(`o-${Date.now()}`, courseCode);
+    const deptId = "d0000000-0000-0000-0000-000000000001";
+    const ayId = "a0000000-0000-0000-0000-000000000001";
+    const schemeId = input.attainment_scheme_id || "s0000000-0000-0000-0000-000000000001";
+    const schemeName = schemeId.includes("2") ? "Autonomous 30/20 Scheme" : "Autonomous 60/40 Scheme";
+
+    const newCourseObj = {
+      id: courseId,
+      department_id: deptId,
+      course_code: courseCode,
+      course_name: courseName,
+      semester: input.semester || "5th Sem",
+      year_of_study: input.year_of_study || "3rd Yr",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      studentsCount: 0,
+      cosCount: schemeId.includes("2") ? 4 : 6,
+      schemeName,
+      offering: {
+        id: offeringId,
+        course_id: courseId,
+        academic_year_id: ayId,
+        teacher_id: "u0000000-0000-0000-0000-000000000001",
+        section: input.section || "A",
+        attainment_scheme_id: schemeId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    };
+
+    // Attempt DB insert
+    try {
+      const db = await getDbClient();
+      await db.from("courses").insert({
+        id: courseId,
+        department_id: deptId,
+        course_code: courseCode,
+        course_name: courseName,
+        semester: newCourseObj.semester,
+        year_of_study: newCourseObj.year_of_study,
+      });
+
+      await db.from("course_offerings").insert({
+        id: offeringId,
+        course_id: courseId,
+        academic_year_id: ayId,
+        section: newCourseObj.offering.section,
+        attainment_scheme_id: schemeId,
+      });
+    } catch {}
+
+    this.courses.unshift(newCourseObj);
+    this.offerings.set(offeringId, newCourseObj.offering);
+    this.rosters.set(offeringId, []);
+    this.marks.set(offeringId, []);
+
+    return newCourseObj;
   }
 
   /**
@@ -46,7 +258,8 @@ class OfferingDomainStore {
    * If database has enrolled students, reconciles with database;
    * otherwise uses the canonical in-memory offering roster.
    */
-  async getRoster(offeringId: string): Promise<ReferenceStudent[]> {
+  async getRoster(rawOfferingId: string): Promise<ReferenceStudent[]> {
+    const offeringId = this.resolveOfferingId(rawOfferingId);
     const validOfferingUuid = toValidUuid(offeringId);
 
     try {

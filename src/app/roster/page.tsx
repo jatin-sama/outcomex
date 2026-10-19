@@ -24,6 +24,19 @@ import { INITIAL_OFFERING, INITIAL_COURSE } from "@/lib/data/initialData";
 export default function StudentRosterPage() {
   const [offeringId, setOfferingId] = useState<string>(INITIAL_OFFERING.id);
   const [roster, setRoster] = useState<ReferenceStudent[]>([]);
+  const [courses, setCourses] = useState<any[]>([]);
+
+  // Load courses for offering selector
+  useEffect(() => {
+    fetch("/api/v1/courses")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.courses && Array.isArray(data.courses) && data.courses.length > 0) {
+          setCourses(data.courses);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Sync offeringId from URL or localStorage
   useEffect(() => {
@@ -36,10 +49,9 @@ export default function StudentRosterPage() {
     }
   }, []);
 
-  // Load roster from canonical store / database via API
-  useEffect(() => {
-    if (!offeringId) return;
-    fetch(`/api/v1/offerings/${offeringId}/roster`)
+  const loadRoster = (targetOfferingId: string) => {
+    if (!targetOfferingId) return;
+    fetch(`/api/v1/offerings/${targetOfferingId}/roster`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.roster && Array.isArray(data.roster)) {
@@ -47,7 +59,54 @@ export default function StudentRosterPage() {
         }
       })
       .catch(() => {});
+  };
+
+  // Load roster from canonical store / database via API
+  useEffect(() => {
+    loadRoster(offeringId);
   }, [offeringId]);
+
+  const currentCourse = courses.find((c) => (c.offering?.id || c.id) === offeringId) || {
+    course_code: INITIAL_COURSE.course_code,
+    course_name: INITIAL_COURSE.course_name,
+    offering: INITIAL_OFFERING,
+  };
+
+  const handleSelectOffering = (newOfferingId: string) => {
+    setOfferingId(newOfferingId);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("outcomeX_active_offering_id", newOfferingId);
+      const url = new URL(window.location.href);
+      url.searchParams.set("offeringId", newOfferingId);
+      window.history.replaceState({}, "", url.toString());
+    }
+    loadRoster(newOfferingId);
+  };
+
+  const handleQuickSeed = async () => {
+    try {
+      const studentsToImport = REFERENCE_STUDENTS.map((s) => ({
+        roll_no: s.roll_no,
+        student_name: s.student_name,
+        status: s.status,
+      }));
+      const res = await fetch(`/api/v1/offerings/${offeringId}/roster`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ students: studentsToImport }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to seed cohort");
+
+      loadRoster(offeringId);
+      setNotification({
+        type: "success",
+        text: `Enrolled ${data.added_count || 81} students successfully into this offering!`,
+      });
+    } catch (err: any) {
+      setNotification({ type: "error", text: err.message });
+    }
+  };
 
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -58,6 +117,7 @@ export default function StudentRosterPage() {
   // Single student form
   const [newRoll, setNewRoll] = useState("");
   const [newName, setNewName] = useState("");
+
 
   // Bulk paste form
   const [bulkText, setBulkText] = useState("");
@@ -224,12 +284,52 @@ export default function StudentRosterPage() {
               <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
                 Student Roster Management
               </h1>
-              <p className="mt-0.5 text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                {INITIAL_COURSE.course_code} • {INITIAL_COURSE.course_name} (Section {INITIAL_OFFERING.section})
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-mono font-bold text-sky-700 dark:text-sky-300 bg-sky-100 dark:bg-sky-950/80 px-2.5 py-0.5 rounded-lg">
+                  {currentCourse.course_code}
+                </span>
+                <span className="text-xs text-slate-700 dark:text-slate-200 font-bold">
+                  {currentCourse.course_name}
+                </span>
+                <span className="text-slate-400">•</span>
+                <span className="text-xs text-emerald-700 dark:text-emerald-300 font-semibold bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-lg border border-emerald-200 dark:border-emerald-800/60">
+                  Section {currentCourse.offering?.section || "A"}
+                </span>
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
+              {/* Offering Selector Dropdown */}
+              {courses.length > 0 && (
+                <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs shadow-xs">
+                  <span className="font-semibold text-slate-500">Course:</span>
+                  <select
+                    value={offeringId}
+                    onChange={(e) => handleSelectOffering(e.target.value)}
+                    className="bg-transparent font-bold text-slate-900 dark:text-white focus:outline-none cursor-pointer"
+                  >
+                    {courses.map((c) => {
+                      const offId = c.offering?.id || c.id;
+                      return (
+                        <option key={offId} value={offId} className="dark:bg-slate-900">
+                          {c.course_code} - {c.course_name} (Sec {c.offering?.section || "A"})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+
+              {roster.length === 0 && (
+                <button
+                  onClick={handleQuickSeed}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 px-3.5 py-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900 transition-colors"
+                >
+                  <UserCheck className="h-4 w-4" />
+                  Seed Cohort (81)
+                </button>
+              )}
+
               <Link
                 href={`/marks?offeringId=${offeringId}`}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/60 px-3.5 py-2 text-xs font-semibold text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900 transition-colors"
@@ -255,6 +355,7 @@ export default function StudentRosterPage() {
               </button>
             </div>
           </div>
+
 
           {/* Notification banner */}
           {notification && (
@@ -379,11 +480,48 @@ export default function StudentRosterPage() {
               </table>
             </div>
 
-            {filteredRoster.length === 0 && (
+            {roster.length === 0 ? (
+              <div className="rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800 p-10 text-center space-y-4 bg-white/60 dark:bg-slate-900/60 mt-4">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-sky-100 dark:bg-sky-950/80 text-sky-600 dark:text-sky-400">
+                  <Users className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    No Students Enrolled in this Course Offering
+                  </h3>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+                    Get started by loading the standard college reference cohort, adding students manually, or pasting a student roster list from Excel.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <button
+                    onClick={handleQuickSeed}
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-xs hover:bg-emerald-500 transition-colors"
+                  >
+                    <UserCheck className="h-4 w-4" />
+                    Seed Reference Cohort (81 Students)
+                  </button>
+                  <button
+                    onClick={() => setIsAddModalOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add Single Student
+                  </button>
+                  <button
+                    onClick={() => setIsBulkModalOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-xs font-semibold text-white shadow-xs hover:bg-sky-500 transition-colors"
+                  >
+                    <Upload className="h-4 w-4" />
+                    Paste Roster from Excel
+                  </button>
+                </div>
+              </div>
+            ) : filteredRoster.length === 0 ? (
               <div className="text-center py-12 text-slate-400 text-sm">
                 No students found matching your search.
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* Add Single Student Modal */}

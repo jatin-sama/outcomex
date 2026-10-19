@@ -24,6 +24,7 @@ import { INITIAL_OFFERING } from "@/lib/data/initialData";
 
 export default function ReportsPage() {
   const [offeringId, setOfferingId] = useState<string>(INITIAL_OFFERING.id);
+  const [courses, setCourses] = useState<any[]>([]);
 
   const [selectedScheme, setSelectedScheme] = useState<"60_40" | "30_20">("60_40");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -35,6 +36,18 @@ export default function ReportsPage() {
   const [reopenReason, setReopenReason] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Load courses for offering selector
+  useEffect(() => {
+    fetch("/api/v1/courses")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.courses && Array.isArray(data.courses) && data.courses.length > 0) {
+          setCourses(data.courses);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Sync offeringId from URL or localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -45,6 +58,23 @@ export default function ReportsPage() {
       localStorage.setItem("outcomeX_active_offering_id", active);
     }
   }, []);
+
+  const currentCourse = courses.find((c) => (c.offering?.id || c.id) === offeringId) || {
+    course_code: "25UCS624T",
+    course_name: "Artificial Intelligence",
+    studentsCount: 0,
+    offering: INITIAL_OFFERING,
+  };
+
+  const handleSelectOffering = (newOfferingId: string) => {
+    setOfferingId(newOfferingId);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("outcomeX_active_offering_id", newOfferingId);
+      const url = new URL(window.location.href);
+      url.searchParams.set("offeringId", newOfferingId);
+      window.history.replaceState({}, "", url.toString());
+    }
+  };
 
   // Fetch report history
   const fetchHistory = async () => {
@@ -61,6 +91,7 @@ export default function ReportsPage() {
   useEffect(() => {
     fetchHistory();
   }, [offeringId]);
+
 
   const handleGenerate = async () => {
     setIsGenerating(true);
@@ -166,11 +197,42 @@ export default function ReportsPage() {
               <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
                 Report Center & Excel Workbook Exports
               </h1>
-              <p className="mt-0.5 text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                Priyadarshini College of Engineering • Attainment Report Generation, Review & Locking Workflow
-              </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-mono font-bold text-sky-700 dark:text-sky-300 bg-sky-100 dark:bg-sky-950/80 px-2.5 py-0.5 rounded-lg">
+                  {currentCourse.course_code}
+                </span>
+                <span className="text-xs text-slate-700 dark:text-slate-200 font-bold">
+                  {currentCourse.course_name}
+                </span>
+                <span className="text-slate-400">•</span>
+                <span className="text-xs text-slate-500">
+                  {currentCourse.studentsCount} Enrolled Students (Sec {currentCourse.offering?.section || "A"})
+                </span>
+              </div>
             </div>
+
+            {/* Offering Selector Dropdown */}
+            {courses.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs shadow-xs">
+                <span className="font-semibold text-slate-500">Course:</span>
+                <select
+                  value={offeringId}
+                  onChange={(e) => handleSelectOffering(e.target.value)}
+                  className="bg-transparent font-bold text-slate-900 dark:text-white focus:outline-none cursor-pointer"
+                >
+                  {courses.map((c) => {
+                    const offId = c.offering?.id || c.id;
+                    return (
+                      <option key={offId} value={offId} className="dark:bg-slate-900">
+                        {c.course_code} - {c.course_name} (Sec {c.offering?.section || "A"})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+            )}
           </div>
+
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Generation Configuration Card */}
@@ -252,16 +314,38 @@ export default function ReportsPage() {
                 </div>
               </div>
 
+              {currentCourse.studentsCount === 0 && (
+                <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 p-4 text-xs text-amber-800 dark:text-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span>This course offering has 0 enrolled students. Enroll students before generating Excel reports.</span>
+                  </div>
+                  <Link
+                    href={`/roster?offeringId=${offeringId}`}
+                    className="shrink-0 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold px-3.5 py-1.5 transition-colors text-center"
+                  >
+                    Manage Roster
+                  </Link>
+                </div>
+              )}
+
               {/* Action Buttons */}
               <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
                 <button
                   onClick={handleGenerate}
-                  disabled={isGenerating}
+                  disabled={isGenerating || currentCourse.studentsCount === 0}
                   className="w-full sm:w-auto flex items-center justify-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-sky-600/25 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   <FileSpreadsheet className="h-4 w-4" />
-                  <span>{isGenerating ? "Generating Workbook..." : "Generate Verified Excel Report"}</span>
+                  <span>
+                    {isGenerating
+                      ? "Generating Workbook..."
+                      : currentCourse.studentsCount === 0
+                      ? "Enroll Students to Generate"
+                      : "Generate Verified Excel Report"}
+                  </span>
                 </button>
+
 
                 {currentDownloadUrl && (
                   <a
