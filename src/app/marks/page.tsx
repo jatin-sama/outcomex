@@ -40,19 +40,31 @@ const ASSESSMENT_COLS = [
 ];
 
 export default function MarksPage() {
-  const offeringId = INITIAL_OFFERING.id;
+  const [offeringId, setOfferingId] = useState<string>(INITIAL_OFFERING.id);
 
   const [mode, setMode] = useState<"editor" | "import">("editor");
 
   // Grid State
   const [marksData, setMarksData] = useState<StudentMarksRecord[]>(REFERENCE_MARKS);
 
-  // Load marks from Supabase database via API
+  // Sync offeringId from URL or localStorage
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const param = new URLSearchParams(window.location.search).get("offeringId");
+      const stored = localStorage.getItem("outcomeX_active_offering_id");
+      const active = param || stored || INITIAL_OFFERING.id;
+      setOfferingId(active);
+      localStorage.setItem("outcomeX_active_offering_id", active);
+    }
+  }, []);
+
+  // Load marks from canonical store / database via API
+  useEffect(() => {
+    if (!offeringId) return;
     fetch(`/api/v1/offerings/${offeringId}/marks`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (data?.marks && Array.isArray(data.marks) && data.marks.length > 0) {
+        if (data?.marks && Array.isArray(data.marks)) {
           setMarksData(data.marks);
         }
       })
@@ -274,35 +286,44 @@ export default function MarksPage() {
                 Student Marks Gradebook
               </h1>
               <p className="mt-0.5 text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-                {INITIAL_COURSE.course_code} • {INITIAL_COURSE.course_name} (81 Enrolled Students)
+                {INITIAL_COURSE.course_code} • {INITIAL_COURSE.course_name} ({marksData.length} Enrolled Students)
               </p>
             </div>
 
-            {/* Mode Switcher */}
-            <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
-              <button
-                onClick={() => setMode("editor")}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  mode === "editor"
-                    ? "bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400 shadow-xs"
-                    : "text-slate-600 dark:text-slate-400"
-                }`}
+            <div className="flex flex-wrap items-center gap-3">
+              <Link
+                href={`/roster?offeringId=${offeringId}`}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
               >
-                <FileSpreadsheet className="h-4 w-4" />
-                Spreadsheet Editor
-              </button>
+                <span>Manage Roster ({marksData.length})</span>
+              </Link>
 
-              <button
-                onClick={() => setMode("import")}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  mode === "import"
-                    ? "bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400 shadow-xs"
-                    : "text-slate-600 dark:text-slate-400"
-                }`}
-              >
-                <Upload className="h-4 w-4" />
-                Import Wizard (.xlsx / .csv)
-              </button>
+              {/* Mode Switcher */}
+              <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                <button
+                  onClick={() => setMode("editor")}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    mode === "editor"
+                      ? "bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400 shadow-xs"
+                      : "text-slate-600 dark:text-slate-400"
+                  }`}
+                >
+                  <FileSpreadsheet className="h-4 w-4" />
+                  Spreadsheet Editor
+                </button>
+
+                <button
+                  onClick={() => setMode("import")}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    mode === "import"
+                      ? "bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400 shadow-xs"
+                      : "text-slate-600 dark:text-slate-400"
+                  }`}
+                >
+                  <Upload className="h-4 w-4" />
+                  Import Wizard (.xlsx / .csv)
+                </button>
+              </div>
             </div>
           </div>
 

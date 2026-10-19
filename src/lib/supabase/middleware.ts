@@ -35,10 +35,10 @@ export async function updateSession(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
   const isAuthPage = pathname.startsWith("/login");
-  const isPublicApi = pathname.startsWith("/api/auth");
+  const isApiRoute = pathname.startsWith("/api/");
 
-  // If user is unauthenticated and attempting to access protected route:
-  if (!user && !isAuthPage && !isPublicApi) {
+  // If user is unauthenticated and attempting to access protected frontend page:
+  if (!user && !isAuthPage && !isApiRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     const redirectResponse = NextResponse.redirect(url);

@@ -23,7 +23,7 @@ import {
 import { INITIAL_OFFERING } from "@/lib/data/initialData";
 
 export default function ReportsPage() {
-  const offeringId = INITIAL_OFFERING.id;
+  const [offeringId, setOfferingId] = useState<string>(INITIAL_OFFERING.id);
 
   const [selectedScheme, setSelectedScheme] = useState<"60_40" | "30_20">("60_40");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -35,8 +35,20 @@ export default function ReportsPage() {
   const [reopenReason, setReopenReason] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Sync offeringId from URL or localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const param = new URLSearchParams(window.location.search).get("offeringId");
+      const stored = localStorage.getItem("outcomeX_active_offering_id");
+      const active = param || stored || INITIAL_OFFERING.id;
+      setOfferingId(active);
+      localStorage.setItem("outcomeX_active_offering_id", active);
+    }
+  }, []);
+
   // Fetch report history
   const fetchHistory = async () => {
+    if (!offeringId) return;
     try {
       const res = await fetch(`/api/v1/offerings/${offeringId}/export`);
       const data = await res.json();
@@ -48,7 +60,7 @@ export default function ReportsPage() {
 
   useEffect(() => {
     fetchHistory();
-  }, []);
+  }, [offeringId]);
 
   const handleGenerate = async () => {
     setIsGenerating(true);

@@ -30,7 +30,15 @@ export default function HistoryPage() {
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/v1/offerings/off-ids-3rd-2526/audit")
+    let activeId = "o0000000-0000-0000-0000-000000000001";
+    if (typeof window !== "undefined") {
+      activeId =
+        new URLSearchParams(window.location.search).get("offeringId") ||
+        localStorage.getItem("outcomeX_active_offering_id") ||
+        activeId;
+    }
+
+    fetch(`/api/v1/offerings/${activeId}/audit`)
       .then((res) => {
         if (res.ok) return res.json();
         throw new Error("Failed to fetch logs");

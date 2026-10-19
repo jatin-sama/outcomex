@@ -23,7 +23,7 @@ import { INITIAL_OFFERING, INITIAL_COURSE } from "@/lib/data/initialData";
 import { EngineCalculationOutput, COAttainmentResult, POAttainmentResult } from "@/lib/engine/attainmentEngine";
 
 export default function AttainmentPage() {
-  const offeringId = INITIAL_OFFERING.id;
+  const [offeringId, setOfferingId] = useState<string>(INITIAL_OFFERING.id);
 
   const [activeTab, setActiveTab] = useState<"overview" | "breakdown" | "components" | "students">("overview");
   const [data, setData] = useState<EngineCalculationOutput | null>(null);
@@ -32,24 +32,26 @@ export default function AttainmentPage() {
   const [selectedPO, setSelectedPO] = useState<POAttainmentResult | null>(null);
   const [searchStudent, setSearchStudent] = useState("");
 
-  const fetchCalculation = async () => {
+  // Sync offeringId from URL or localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const param = new URLSearchParams(window.location.search).get("offeringId");
+      const stored = localStorage.getItem("outcomeX_active_offering_id");
+      const active = param || stored || INITIAL_OFFERING.id;
+      setOfferingId(active);
+      localStorage.setItem("outcomeX_active_offering_id", active);
+    }
+  }, []);
+
+  const fetchCalculation = async (activeId?: string) => {
+    const idToUse = activeId || offeringId;
+    if (!idToUse) return;
     setLoading(true);
     try {
-      let customMarks = null;
-      try {
-        const saved = localStorage.getItem("outcomeX_marks");
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            customMarks = parsed;
-          }
-        }
-      } catch {}
-
-      const res = await fetch(`/api/v1/offerings/${offeringId}/calculate`, {
+      const res = await fetch(`/api/v1/offerings/${idToUse}/calculate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(customMarks ? { studentMarks: customMarks } : {}),
+        body: JSON.stringify({}),
       });
       const result = await res.json();
       setData(result);
@@ -62,8 +64,8 @@ export default function AttainmentPage() {
   };
 
   useEffect(() => {
-    fetchCalculation();
-  }, []);
+    fetchCalculation(offeringId);
+  }, [offeringId]);
 
   return (
     <div className="min-h-screen bg-slate-50/50 dark:bg-slate-950">
@@ -93,7 +95,7 @@ export default function AttainmentPage() {
 
             <div className="flex items-center gap-2.5">
               <button
-                onClick={fetchCalculation}
+                onClick={() => fetchCalculation(offeringId)}
                 disabled={loading}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
               >

@@ -16,19 +16,33 @@ import {
 } from "lucide-react";
 import {
   INITIAL_COURSE,
+  INITIAL_OFFERING,
   INITIAL_COS,
   INITIAL_POS,
   INITIAL_MAPPINGS,
 } from "@/lib/data/initialData";
 
 export default function MappingsPage() {
+  const [offeringId, setOfferingId] = useState<string>(INITIAL_OFFERING.id);
   const [mappings, setMappings] = useState<Record<string, Record<string, number | null>>>(
     JSON.parse(JSON.stringify(INITIAL_MAPPINGS))
   );
 
-  // Load mappings from Supabase database via API
+  // Sync offeringId from URL or localStorage
   React.useEffect(() => {
-    fetch("/api/v1/offerings/o0000000-0000-0000-0000-000000000001/mappings")
+    if (typeof window !== "undefined") {
+      const param = new URLSearchParams(window.location.search).get("offeringId");
+      const stored = localStorage.getItem("outcomeX_active_offering_id");
+      const active = param || stored || INITIAL_OFFERING.id;
+      setOfferingId(active);
+      localStorage.setItem("outcomeX_active_offering_id", active);
+    }
+  }, []);
+
+  // Load mappings from database via API
+  React.useEffect(() => {
+    if (!offeringId) return;
+    fetch(`/api/v1/offerings/${offeringId}/mappings`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.mappings && typeof data.mappings === "object" && Object.keys(data.mappings).length > 0) {
@@ -36,7 +50,7 @@ export default function MappingsPage() {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [offeringId]);
 
   const [saveSuccess, setSaveSuccess] = useState(false);
 
@@ -76,7 +90,7 @@ export default function MappingsPage() {
 
   const handleSave = async () => {
     try {
-      await fetch("/api/v1/offerings/o0000000-0000-0000-0000-000000000001/mappings", {
+      await fetch(`/api/v1/offerings/${offeringId}/mappings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mappings }),

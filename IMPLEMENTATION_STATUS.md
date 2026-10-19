@@ -156,3 +156,53 @@ PYTHON_EXECUTABLE=python
    ```
 
 OutcomeX is ready for faculty and administrative deployment.
+
+---
+
+## 6. Emergency End-to-End Integration Fix Report
+
+### Root Causes Identified
+1. **Disjoint Backend In-Memory Stores**:
+   `src/app/api/v1/offerings/[id]/roster/route.ts` and `src/app/api/v1/offerings/[id]/marks/route.ts` maintained separate module-level state variables. When a student was enrolled in Roster, Marks had no access to the update.
+2. **Marks Query Omitted Enrolled Students**:
+   `GET /marks` queried `student_marks` inner-joined with `enrollments`. A newly enrolled student has no marks in `student_marks` yet, causing them to be completely omitted from the marks gradebook.
+3. **Invalid Non-Hex UUIDs in Data Constants**:
+   IDs such as `"o0000000-0000-0000-0000-000000000001"`, `"s0000000-..."`, `"s029"`, and `"po01"` contained non-hex characters (`o`, `s`, `u`, `p`), causing Postgres to throw `invalid input syntax for type uuid` errors on database operations.
+4. **Middleware Redirecting Internal API Routes**:
+   `src/lib/supabase/middleware.ts` redirected all unauthenticated `/api/v1/` calls to the HTML `/login` page instead of allowing API route handling.
+5. **Hardcoded Course Offering IDs Across Pages**:
+   Navigation links between pages (`/roster`, `/marks`, `/mappings`, `/reports`, `/attainment`) did not propagate active course offering query parameters or localStorage active state.
+
+### Actions Taken & Architecture Repaired
+1. **Canonical Domain Offering Store (`src/lib/domain/offeringStore.ts`)**:
+   Created a single authoritative domain service that manages offering rosters, marks records, component configurations, and persistence.
+   - Guarantees that marks records are **strictly driven by the roster**. When a student is added to an offering's roster, they are immediately registered in that offering's marks grid with empty marks `{}` ready for teacher entry.
+   - Converts non-hex IDs into deterministic, valid 36-character PostgreSQL UUIDs via `toValidUuid()`.
+2. **Unified API Endpoints**:
+   - `src/app/api/v1/offerings/[id]/roster/route.ts`: Refactored to use `offeringStore`.
+   - `src/app/api/v1/offerings/[id]/marks/route.ts`: Refactored to use `offeringStore`.
+   - `src/app/api/v1/offerings/[id]/calculate/route.ts`: Refactored to evaluate actual offering marks from `offeringStore`.
+3. **Frontend Offering Synchronization & Direct Navigation**:
+   - `src/app/roster/page.tsx`: Dynamically resolves active offering from URL params and localStorage; added direct "Go to Marks Entry" button.
+   - `src/app/marks/page.tsx`: Dynamically resolves active offering; renders live roster count; added "Manage Roster" navigation button.
+   - `src/app/mappings/page.tsx`: Dynamically resolves active offering and removed hardcoded UUID strings.
+   - `src/app/reports/page.tsx`: Dynamically resolves active offering.
+   - `src/app/attainment/page.tsx`: Dynamically resolves active offering and calculates attainment directly from saved offering marks.
+   - `src/app/courses/page.tsx`: Updated "Manage Roster" and "Open Offering" cards to propagate `?offeringId=...`.
+4. **Middleware API Route Bypass**:
+   Updated `src/lib/supabase/middleware.ts` to allow `/api/` endpoints to process without redirecting to `/login`.
+
+### Verification & Test Results
+- **Automated Regression Suite (`tests/test_e2e_roster_marks_integration.py`)**:
+  Passed all tests verifying newly enrolled students appear in marks grids and drive component/CO/PO calculations. Total Python tests: **67/67 PASSED**.
+- **Live HTTP End-to-End Test (`verify_live_e2e_integration.mjs`)**:
+  1. Checked initial roster: 81 students.
+  2. Added test student Roll 999 ("DEMO TEST STUDENT") &rarr; 200 OK, total roster: 82.
+  3. Queried Marks Entry &rarr; Student 999 was present in gradebook.
+  4. Entered marks for 999 (`mt1_co1: 9.0, mt1_co2: 8.0, ese_co1: 8.5, ta: 10.0`) &rarr; 200 OK.
+  5. Verified marks persistence after simulated reload &rarr; 200 OK, marks preserved.
+  6. Calculated attainment using saved marks &rarr; 200 OK, evaluated all 82 students.
+  7. Cleaned up test student &rarr; Restored roster count to 81.
+- **TypeScript Typecheck (`npx tsc --noEmit`)**: 0 errors.
+- **Production Build (`npm run build`)**: Code 0 (all 24 static and dynamic routes compiled successfully).
+

@@ -22,16 +22,27 @@ import { REFERENCE_STUDENTS, ReferenceStudent } from "@/lib/data/referenceStuden
 import { INITIAL_OFFERING, INITIAL_COURSE } from "@/lib/data/initialData";
 
 export default function StudentRosterPage() {
-  const offeringId = INITIAL_OFFERING.id;
-
+  const [offeringId, setOfferingId] = useState<string>(INITIAL_OFFERING.id);
   const [roster, setRoster] = useState<ReferenceStudent[]>(REFERENCE_STUDENTS);
 
-  // Load roster from Supabase database via API
+  // Sync offeringId from URL or localStorage
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const param = new URLSearchParams(window.location.search).get("offeringId");
+      const stored = localStorage.getItem("outcomeX_active_offering_id");
+      const active = param || stored || INITIAL_OFFERING.id;
+      setOfferingId(active);
+      localStorage.setItem("outcomeX_active_offering_id", active);
+    }
+  }, []);
+
+  // Load roster from canonical store / database via API
+  useEffect(() => {
+    if (!offeringId) return;
     fetch(`/api/v1/offerings/${offeringId}/roster`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (data?.roster && Array.isArray(data.roster) && data.roster.length > 0) {
+        if (data?.roster && Array.isArray(data.roster)) {
           setRoster(data.roster);
         }
       })
@@ -218,7 +229,15 @@ export default function StudentRosterPage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <Link
+                href={`/marks?offeringId=${offeringId}`}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/60 px-3.5 py-2 text-xs font-semibold text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900 transition-colors"
+              >
+                <FileSpreadsheet className="h-4 w-4" />
+                Go to Marks Entry
+              </Link>
+
               <button
                 onClick={() => setIsAddModalOpen(true)}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700"

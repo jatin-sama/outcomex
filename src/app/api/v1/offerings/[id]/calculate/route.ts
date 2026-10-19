@@ -14,7 +14,12 @@ export async function POST(
 
     const engine = new AttainmentEngine(schemeOverrides);
 
-    const studentsToEvaluate = Array.isArray(studentMarks) ? studentMarks : REFERENCE_MARKS;
+    let studentsToEvaluate = Array.isArray(studentMarks) ? studentMarks : null;
+    if (!studentsToEvaluate || studentsToEvaluate.length === 0) {
+      const { offeringStore } = await import("@/lib/domain/offeringStore");
+      const { marks } = await offeringStore.getMarks(id);
+      studentsToEvaluate = marks;
+    }
 
     // Component configurations mapped to COs
     const componentConfigs: ComponentConfig[] = [
