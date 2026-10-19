@@ -31,13 +31,17 @@ export default async function DashboardPage() {
   const userRole = (user.user_metadata?.role as string) || "Teacher / Course Coordinator";
   const userEmail = user.email || "";
 
-  let enrolledCount = 81;
+  let enrolledCount = 0;
   let activeOfferingsCount = 1;
   let pendingReportsCount = 0;
   let activeCourseName = "Introduction to Data Science (25UCS623T)";
   let activeOfferingSection = "3rd Year / 5th Semester • Section A • Department of Computer Science & Engineering";
 
   try {
+    const { offeringStore, DEFAULT_OFFERING_ID } = await import("@/lib/domain/offeringStore");
+    const initialRoster = await offeringStore.getRoster(DEFAULT_OFFERING_ID);
+    enrolledCount = initialRoster.length;
+
     const { getDbClient } = await import("@/lib/supabase/admin");
     const db = await getDbClient();
 

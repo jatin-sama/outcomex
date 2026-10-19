@@ -41,7 +41,9 @@ export async function POST(
       ...(maxMarks || {}),
     };
 
-    const enrolledRolls = new Set(REFERENCE_STUDENTS.map((s) => s.roll_no.trim()));
+    const { offeringStore } = await import("@/lib/domain/offeringStore");
+    const roster = await offeringStore.getRoster(id);
+    const enrolledRolls = new Set(roster.map((s) => s.roll_no.trim()));
     const seenRolls = new Set<string>();
 
     const rowErrors: Array<{ row: number; roll_no: string; message: string; severity: "error" | "warning" }> = [];

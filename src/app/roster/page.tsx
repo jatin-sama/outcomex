@@ -23,7 +23,7 @@ import { INITIAL_OFFERING, INITIAL_COURSE } from "@/lib/data/initialData";
 
 export default function StudentRosterPage() {
   const [offeringId, setOfferingId] = useState<string>(INITIAL_OFFERING.id);
-  const [roster, setRoster] = useState<ReferenceStudent[]>(REFERENCE_STUDENTS);
+  const [roster, setRoster] = useState<ReferenceStudent[]>([]);
 
   // Sync offeringId from URL or localStorage
   useEffect(() => {

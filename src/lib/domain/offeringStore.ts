@@ -36,9 +36,8 @@ class OfferingDomainStore {
   private assessments: Map<string, any[]> = new Map();
 
   constructor() {
-    // Seed default offering (IDS 25UCS623T)
-    this.rosters.set(DEFAULT_OFFERING_ID, JSON.parse(JSON.stringify(REFERENCE_STUDENTS)));
-    this.marks.set(DEFAULT_OFFERING_ID, JSON.parse(JSON.stringify(REFERENCE_MARKS)));
+    this.rosters.set(DEFAULT_OFFERING_ID, []);
+    this.marks.set(DEFAULT_OFFERING_ID, []);
     this.assessments.set(DEFAULT_OFFERING_ID, JSON.parse(JSON.stringify(INITIAL_ASSESSMENTS)));
   }
 
@@ -83,11 +82,7 @@ class OfferingDomainStore {
     }
 
     if (!this.rosters.has(offeringId)) {
-      if (offeringId === DEFAULT_OFFERING_ID) {
-        this.rosters.set(offeringId, JSON.parse(JSON.stringify(REFERENCE_STUDENTS)));
-      } else {
-        this.rosters.set(offeringId, []);
-      }
+      this.rosters.set(offeringId, []);
     }
 
     return this.rosters.get(offeringId)!;
@@ -211,11 +206,7 @@ class OfferingDomainStore {
     let marksList: StudentMarksRecord[] = this.marks.get(offeringId) || [];
 
     if (!this.marks.has(offeringId)) {
-      if (offeringId === DEFAULT_OFFERING_ID) {
-        marksList = JSON.parse(JSON.stringify(REFERENCE_MARKS));
-      } else {
-        marksList = [];
-      }
+      marksList = [];
       this.marks.set(offeringId, marksList);
     }
 

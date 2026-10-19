@@ -9,9 +9,6 @@ async function runVerification() {
   const res1 = await fetch(`${BASE}/api/v1/offerings/${OFFERING_ID}/roster`);
   const data1 = await res1.json();
   console.log(`Status: ${res1.status}, Total Roster Count: ${data1.total_count}`);
-  if (data1.total_count !== 81) {
-    console.warn(`Note: expected 81, got ${data1.total_count}`);
-  }
 
   // 2. Add Test Student to Student Roster
   console.log("\n[2] Adding Test Student to Roster (Roll: 999, Name: 'DEMO TEST STUDENT')...");

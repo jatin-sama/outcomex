@@ -5,7 +5,7 @@ import { INITIAL_COURSE, INITIAL_SCHEMES } from "@/lib/data/initialData";
 const FALLBACK_COURSES = [
   {
     ...INITIAL_COURSE,
-    studentsCount: 81,
+    studentsCount: 0,
     cosCount: 6,
     schemeName: "Autonomous 60/40 Scheme",
     offering: {

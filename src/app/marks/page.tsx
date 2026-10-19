@@ -45,7 +45,7 @@ export default function MarksPage() {
   const [mode, setMode] = useState<"editor" | "import">("editor");
 
   // Grid State
-  const [marksData, setMarksData] = useState<StudentMarksRecord[]>(REFERENCE_MARKS);
+  const [marksData, setMarksData] = useState<StudentMarksRecord[]>([]);
 
   // Sync offeringId from URL or localStorage
   useEffect(() => {
