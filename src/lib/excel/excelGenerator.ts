@@ -127,10 +127,16 @@ export async function generateExcelReport(
 
     const startRow = 29;
     const cohortSize = studentRecords.length;
+    const maxCapacity = 65; // rows 29 to 93 inclusive
+
+    if (cohortSize > maxCapacity) {
+      throw new Error(
+        `Cohort size (${cohortSize}) exceeds master 30/20 template capacity of ${maxCapacity} students. To preserve accredited formula structure, please split cohort into sections.`
+      );
+    }
 
     for (let i = 0; i < studentRecords.length; i++) {
       const r = startRow + i;
-      if (r > 93) break; // 30/20 default student range ends at row 93
 
       const student = studentRecords[i];
       const rollStr = String(student.roll_no || "").trim();
@@ -190,10 +196,16 @@ export async function generateExcelReport(
 
     const startRow = 29;
     const cohortSize = studentRecords.length;
+    const maxCapacity = 81; // rows 29 to 109 inclusive
+
+    if (cohortSize > maxCapacity) {
+      throw new Error(
+        `Cohort size (${cohortSize}) exceeds master 60/40 template capacity of ${maxCapacity} students. To preserve accredited formula structure, please split cohort into sections.`
+      );
+    }
 
     for (let i = 0; i < studentRecords.length; i++) {
       const r = startRow + i;
-      if (r > 109) break; // 60/40 student range ends at row 109
 
       const student = studentRecords[i];
       const rollStr = String(student.roll_no || "").trim();

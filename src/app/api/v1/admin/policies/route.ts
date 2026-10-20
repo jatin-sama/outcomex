@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDbClient } from "@/lib/supabase/admin";
+import { getAuthenticatedUser } from "@/lib/auth/authHelper";
 
 export async function GET() {
   try {
@@ -12,7 +13,7 @@ export async function GET() {
       .maybeSingle();
 
     if (!error && data) {
-      const config = data.config_json || {};
+      const config = (data.config_json as any) || {};
       return NextResponse.json({
         poAggregationMode: data.po_aggregation_method === "MAPPING_AVERAGE" ? "reference" : "weighted",
         studentThreshold: Number(data.threshold_percent) || 45,
@@ -61,6 +62,21 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const authCtx = await getAuthenticatedUser(request);
+    if (!authCtx) {
+      return NextResponse.json(
+        { error: "Authentication required to update academic policies." },
+        { status: 401 }
+      );
+    }
+
+    if (authCtx.role !== "hod" && authCtx.role !== "department_admin" && !authCtx.isServiceRole) {
+      return NextResponse.json(
+        { error: "Forbidden: Only Department Admin or HOD may configure institutional OBE policies." },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
     const {
       poAggregationMode,
@@ -83,12 +99,13 @@ export async function POST(request: NextRequest) {
 
     if (existingScheme?.id) {
       const mergedConfig = {
-        ...(existingScheme.config_json || {}),
+        ...((existingScheme.config_json as any) || {}),
         absenteePolicy: absenteePolicy || "zero",
         updatedAt: new Date().toISOString(),
+        updatedBy: authCtx.user.email,
       };
 
-      await db
+      const { error: updateErr } = await db
         .from("attainment_schemes")
         .update({
           po_aggregation_method: poAggMethod,
@@ -100,13 +117,19 @@ export async function POST(request: NextRequest) {
         })
         .eq("id", existingScheme.id);
 
+      if (updateErr) {
+        throw new Error(`Failed to update scheme policies: ${updateErr.message}`);
+      }
+
       // Audit log
       try {
         await db.from("audit_logs").insert({
+          profile_id: authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null,
           action: "UPDATE_POLICY",
-          entity: "attainment_schemes",
-          entity_id: existingScheme.id,
+          resource_type: "attainment_schemes",
+          resource_id: existingScheme.id,
           payload: {
+            user_email: authCtx.user.email,
             poAggregationMode,
             studentThreshold,
             level2Boundary,

@@ -1,17 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
-import { offeringStore } from "@/lib/domain/offeringStore";
+import { offeringStore, isValidUuid } from "@/lib/domain/offeringStore";
 import { getDbClient } from "@/lib/supabase/admin";
+import { getAuthenticatedUser, authorizeOfferingAccess } from "@/lib/auth/authHelper";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+
+  if (!isValidUuid(id)) {
+    return NextResponse.json(
+      { error: `Invalid offering ID "${id}": must be a valid UUID.` },
+      { status: 400 }
+    );
+  }
+
   const searchParams = request.nextUrl.searchParams;
   const query = (searchParams.get("q") || "").toLowerCase().trim();
   const statusFilter = searchParams.get("status");
 
   try {
+    const authCtx = await getAuthenticatedUser(request);
+    if (!authCtx) {
+      return NextResponse.json(
+        { error: "Authentication required to view student roster." },
+        { status: 401 }
+      );
+    }
+
+    const authCheck = await authorizeOfferingAccess(authCtx, id);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { error: authCheck.reason || "Unauthorized access to this offering." },
+        { status: 403 }
+      );
+    }
+
     let roster = await offeringStore.getRoster(id);
 
     if (query) {
@@ -47,7 +72,31 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+
+  if (!isValidUuid(id)) {
+    return NextResponse.json(
+      { error: `Invalid offering ID "${id}": must be a valid UUID.` },
+      { status: 400 }
+    );
+  }
+
   try {
+    const authCtx = await getAuthenticatedUser(request);
+    if (!authCtx) {
+      return NextResponse.json(
+        { error: "Authentication required to add students." },
+        { status: 401 }
+      );
+    }
+
+    const authCheck = await authorizeOfferingAccess(authCtx, id);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { error: authCheck.reason || "Unauthorized access to this offering." },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
     const studentsToAdd: Array<{ roll_no: string; student_name: string; status?: string }> =
       Array.isArray(body.students) ? body.students : [body];
@@ -92,7 +141,22 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+
+  if (!isValidUuid(id)) {
+    return NextResponse.json({ error: "Invalid course offering ID." }, { status: 400 });
+  }
+
   try {
+    const authCtx = await getAuthenticatedUser(request);
+    if (!authCtx) {
+      return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+    }
+
+    const authCheck = await authorizeOfferingAccess(authCtx, id);
+    if (!authCheck.authorized) {
+      return NextResponse.json({ error: authCheck.reason || "Unauthorized." }, { status: 403 });
+    }
+
     const body = await request.json();
     const { student_id, status } = body;
 
@@ -103,24 +167,21 @@ export async function PATCH(
       );
     }
 
-    const roster = await offeringStore.getRoster(id);
-    const target = roster.find((s) => s.id === student_id || s.roll_no === student_id);
+    const db = await getDbClient();
+    const { data: updated, error } = await db
+      .from("enrollments")
+      .update({ status, updated_at: new Date().toISOString() })
+      .match({ course_offering_id: id, id: student_id })
+      .select()
+      .single();
 
-    if (!target) {
-      return NextResponse.json({ error: "Student not found in roster." }, { status: 404 });
+    if (error) {
+      throw new Error(`Database error updating student status: ${error.message}`);
     }
-
-    target.status = status;
-
-    // Persist to Supabase if possible
-    try {
-      const db = await getDbClient();
-      await db.from("enrollments").update({ status }).eq("id", target.id);
-    } catch {}
 
     return NextResponse.json({
       success: true,
-      student: target,
+      student: updated,
     });
   } catch (err: any) {
     return NextResponse.json(
@@ -135,29 +196,51 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const searchParams = request.nextUrl.searchParams;
-  const studentId = searchParams.get("student_id");
-  const clearAll = searchParams.get("all") === "true" || searchParams.get("clear_all") === "true";
 
-  if (clearAll) {
-    await offeringStore.clearRoster(id);
+  if (!isValidUuid(id)) {
+    return NextResponse.json({ error: "Invalid course offering ID." }, { status: 400 });
+  }
+
+  try {
+    const authCtx = await getAuthenticatedUser(request);
+    if (!authCtx) {
+      return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+    }
+
+    const authCheck = await authorizeOfferingAccess(authCtx, id);
+    if (!authCheck.authorized) {
+      return NextResponse.json({ error: authCheck.reason || "Unauthorized." }, { status: 403 });
+    }
+
+    const searchParams = request.nextUrl.searchParams;
+    const studentId = searchParams.get("student_id");
+    const clearAll = searchParams.get("all") === "true" || searchParams.get("clear_all") === "true";
+
+    if (clearAll) {
+      await offeringStore.clearRoster(id);
+      return NextResponse.json({
+        success: true,
+        cleared: true,
+        remaining_count: 0,
+      });
+    }
+
+    if (!studentId) {
+      return NextResponse.json({ error: "student_id query param is required." }, { status: 400 });
+    }
+
+    await offeringStore.deleteStudent(id, studentId);
+    const remaining = await offeringStore.getRoster(id);
+
     return NextResponse.json({
       success: true,
-      cleared: true,
-      remaining_count: 0,
+      deleted_id: studentId,
+      remaining_count: remaining.length,
     });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err.message || "Failed to delete student from roster" },
+      { status: 500 }
+    );
   }
-
-  if (!studentId) {
-    return NextResponse.json({ error: "student_id query param is required." }, { status: 400 });
-  }
-
-  await offeringStore.deleteStudent(id, studentId);
-  const remaining = await offeringStore.getRoster(id);
-
-  return NextResponse.json({
-    success: true,
-    deleted_id: studentId,
-    remaining_count: remaining.length,
-  });
 }

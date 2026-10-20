@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
-import { INITIAL_COURSE, INITIAL_OFFERING, INITIAL_DEPARTMENT, INITIAL_ACADEMIC_YEAR, INITIAL_COS, INITIAL_POS, INITIAL_MAPPINGS } from "@/lib/data/initialData";
+import { INITIAL_COURSE, INITIAL_OFFERING, INITIAL_DEPARTMENT, INITIAL_ACADEMIC_YEAR, INITIAL_COS, INITIAL_POS, INITIAL_MAPPINGS, INITIAL_SCHEMES } from "@/lib/data/initialData";
 import { getDbClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
-import { offeringStore, toValidUuid } from "@/lib/domain/offeringStore";
-import { AttainmentEngine, ComponentConfig } from "@/lib/engine/attainmentEngine";
+import { offeringStore, isValidUuid, normalizeComponentKey } from "@/lib/domain/offeringStore";
+import { AttainmentEngine, ComponentConfig, SchemeConfig } from "@/lib/engine/attainmentEngine";
+import { generateExcelReport } from "@/lib/excel/excelGenerator";
+import { getAuthenticatedUser, authorizeOfferingAccess } from "@/lib/auth/authHelper";
 
 export interface ReportHistoryItem {
   id: string;
@@ -27,96 +28,121 @@ export interface ReportHistoryItem {
   repaired_formulas?: string[];
 }
 
-let reportHistory: ReportHistoryItem[] = [];
-
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+
+  if (!isValidUuid(id)) {
+    return NextResponse.json(
+      { error: `Invalid offering ID "${id}": must be a valid UUID.` },
+      { status: 400 }
+    );
+  }
+
   try {
+    // 1. Authenticate & Authorize Requesting User
+    const authCtx = await getAuthenticatedUser(request);
+    if (!authCtx) {
+      return NextResponse.json(
+        { error: "Authentication required to generate or manage official reports." },
+        { status: 401 }
+      );
+    }
+
+    const authCheck = await authorizeOfferingAccess(authCtx, id);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { error: authCheck.reason || "Unauthorized access to this course offering." },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json().catch(() => ({}));
     const action = body.action || "GENERATE"; // GENERATE, SUBMIT, APPROVE, REJECT, LOCK, REOPEN
     const reportId = body.reportId;
     const comments = body.comments;
     const reason = body.reason;
 
-    // Authenticate requesting user
-    let userEmail = request.headers.get("x-user-email") || "teacher.cse@pce.edu.in";
-    try {
-      const supabase = await createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user?.email) {
-        userEmail = user.email;
-      }
-    } catch {}
-
     const db = await getDbClient();
-    const validOfferingUuid = toValidUuid(id);
 
-    // 1. Workflow Transition Actions on Existing Reports
+    // 2. Workflow Transition Actions on Existing Reports
     if (action !== "GENERATE" && reportId) {
-      const report = reportHistory.find((r) => r.id === reportId);
+      if (!isValidUuid(reportId)) {
+        return NextResponse.json({ error: "Invalid reportId: must be a valid UUID." }, { status: 400 });
+      }
+
+      // Check permissions: HOD required for APPROVE, REJECT, LOCK, REOPEN
+      if (["APPROVE", "REJECT", "LOCK", "REOPEN"].includes(action)) {
+        if (authCtx.role !== "hod" && authCtx.role !== "department_admin" && !authCtx.isServiceRole) {
+          return NextResponse.json(
+            { error: "Forbidden: Department Admin / HOD authority required to review, approve, lock, or reopen reports." },
+            { status: 403 }
+          );
+        }
+      }
+
       let updatedStatus: ReportHistoryItem["workflow_status"] = "CALCULATED";
+      const updatePayload: Record<string, any> = {
+        updated_at: new Date().toISOString(),
+      };
 
       if (action === "SUBMIT") {
         updatedStatus = "SUBMITTED";
-        if (report) {
-          report.workflow_status = "SUBMITTED";
-          report.submitted_at = new Date().toISOString();
-        }
+        updatePayload.workflow_status = "SUBMITTED";
+        updatePayload.submitted_by = authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null;
+        updatePayload.submitted_at = new Date().toISOString();
       } else if (action === "APPROVE") {
         updatedStatus = "APPROVED";
-        if (report) {
-          report.workflow_status = "APPROVED";
-          report.reviewed_at = new Date().toISOString();
-          report.reviewer_comments = comments || "Approved by Department HOD.";
-        }
+        updatePayload.workflow_status = "APPROVED";
+        updatePayload.reviewed_by = authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null;
+        updatePayload.reviewed_at = new Date().toISOString();
+        updatePayload.reviewer_comments = comments || "Approved by Department HOD.";
       } else if (action === "REJECT") {
         updatedStatus = "DRAFT";
-        if (report) {
-          report.workflow_status = "DRAFT";
-          report.reviewed_at = new Date().toISOString();
-          report.reviewer_comments = comments || "Revisions requested by reviewer.";
-        }
+        updatePayload.workflow_status = "DRAFT";
+        updatePayload.reviewed_by = authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null;
+        updatePayload.reviewed_at = new Date().toISOString();
+        updatePayload.reviewer_comments = comments || "Revisions requested by reviewer.";
       } else if (action === "LOCK") {
         updatedStatus = "LOCKED";
-        if (report) {
-          report.workflow_status = "LOCKED";
-          report.locked_at = new Date().toISOString();
-        }
+        updatePayload.workflow_status = "LOCKED";
+        updatePayload.locked_at = new Date().toISOString();
       } else if (action === "REOPEN") {
         if (!reason || !reason.trim()) {
-          return NextResponse.json({ error: "A valid authorized reason is required to reopen a locked report." }, { status: 400 });
+          return NextResponse.json(
+            { error: "A valid authorized reason is required to reopen a locked report." },
+            { status: 400 }
+          );
         }
         updatedStatus = "DRAFT";
-        if (report) {
-          report.workflow_status = "DRAFT";
-          report.reopened_at = new Date().toISOString();
-          report.reopen_reason = reason.trim();
-        }
+        updatePayload.workflow_status = "DRAFT";
+        updatePayload.reopened_at = new Date().toISOString();
+        updatePayload.reopen_reason = reason.trim();
       }
 
-      // Persist workflow state to Supabase
-      try {
-        await db.from("report_runs").update({
-          workflow_status: updatedStatus,
-          reviewer_comments: comments || null,
-          reopen_reason: reason || null,
-        }).eq("id", reportId);
-      } catch {}
+      const { data: updatedReport, error: updateErr } = await db
+        .from("report_runs")
+        .update(updatePayload)
+        .eq("id", reportId)
+        .select()
+        .single();
 
-      // Log audit
+      if (updateErr) {
+        throw new Error(`Failed to update report workflow status in database: ${updateErr.message}`);
+      }
+
+      // Log durable audit event
       try {
-        const { logAuditEvent } = await import("@/lib/audit/auditLogger");
-        logAuditEvent({
-          offering_id: id,
-          user_email: userEmail,
-          action: "REPORT_GENERATED",
+        await db.from("audit_logs").insert({
+          profile_id: authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null,
+          action: `REPORT_${action}`,
           resource_type: "report_runs",
           resource_id: reportId,
           payload: {
-            workflow_transition: action,
+            offering_id: id,
+            action,
             new_status: updatedStatus,
             comments,
             reason,
@@ -129,134 +155,143 @@ export async function POST(
         action,
         report_id: reportId,
         new_status: updatedStatus,
-        report,
+        report: updatedReport,
       });
     }
 
-    // 2. Generate New Report Using Real Database Data
+    // 3. Generate New Database-Backed Report
     const schemeType = body.schemeType || "60_40";
 
-    // A. Query real offering and course metadata from database
-    let courseCode = INITIAL_COURSE.course_code;
-    let courseName = INITIAL_COURSE.course_name;
-    let departmentCode = INITIAL_DEPARTMENT.code;
-    let yearSemester = `${INITIAL_COURSE.year_of_study} / ${INITIAL_COURSE.semester}`;
-    let academicYear = INITIAL_ACADEMIC_YEAR.year_label;
-    let section = "A";
-    let schemeOverrides: any = undefined;
-
-    try {
-      const { data: offering } = await db
-        .from("course_offerings")
-        .select(`
-          id,
-          section,
-          courses (
-            course_code,
-            course_name,
-            semester,
-            year_of_study,
-            departments (
-              code
-            )
-          ),
-          academic_years (
-            year_label
-          ),
-          attainment_schemes (
-            scheme_name,
-            threshold_percent,
-            level_3_threshold,
-            level_2_threshold,
-            direct_weight,
-            indirect_weight,
-            iam_weight,
-            esam_weight,
-            po_aggregation_method
+    // A. Query real offering, course, department, and academic year metadata
+    const { data: offering, error: offErr } = await db
+      .from("course_offerings")
+      .select(`
+        id,
+        course_id,
+        section,
+        courses (
+          course_code,
+          course_name,
+          semester,
+          year_of_study,
+          department_id,
+          departments (
+            code,
+            name
           )
-        `)
-        .eq("id", validOfferingUuid)
-        .maybeSingle();
+        ),
+        academic_years (
+          year_label
+        ),
+        attainment_schemes (
+          scheme_name,
+          threshold_percent,
+          level_3_threshold,
+          level_2_threshold,
+          direct_weight,
+          indirect_weight,
+          iam_weight,
+          esam_weight,
+          po_aggregation_method
+        )
+      `)
+      .eq("id", id)
+      .maybeSingle();
 
-      if (offering) {
-        const off: any = offering;
-        const c = Array.isArray(off.courses) ? off.courses[0] : off.courses;
-        if (c) {
-          courseCode = c.course_code || courseCode;
-          courseName = c.course_name || courseName;
-          yearSemester = `${c.year_of_study || ""} / ${c.semester || ""}`.trim();
-          const dept = Array.isArray(c.departments) ? c.departments[0] : c.departments;
-          if (dept?.code) {
-            departmentCode = dept.code;
-          }
-        }
-        const ay = Array.isArray(off.academic_years) ? off.academic_years[0] : off.academic_years;
-        if (ay?.year_label) {
-          academicYear = ay.year_label;
-        }
-        if (off.section) {
-          section = off.section;
-        }
-        const ascheme = Array.isArray(off.attainment_schemes) ? off.attainment_schemes[0] : off.attainment_schemes;
-        if (ascheme) {
-          schemeOverrides = ascheme;
-        }
-      }
-    } catch (err) {
-      console.warn("DB Offering metadata fetch notice:", err);
+    if (offErr) {
+      throw new Error(`Database error fetching offering metadata: ${offErr.message}`);
     }
 
-    // B. Query actual enrolled student roster
-    let studentRecords = body.studentRecords;
-    if (!studentRecords || !Array.isArray(studentRecords) || studentRecords.length === 0) {
-      const roster = await offeringStore.getRoster(id);
-      if (!roster || roster.length === 0) {
-        return NextResponse.json(
-          { error: "Cannot generate report: Offering has no enrolled students. Please enroll students in the roster first." },
-          { status: 400 }
-        );
-      }
+    const c: any = offering?.courses;
+    const courseCode = (Array.isArray(c) ? c[0]?.course_code : c?.course_code) || INITIAL_COURSE.course_code;
+    const courseName = (Array.isArray(c) ? c[0]?.course_name : c?.course_name) || INITIAL_COURSE.course_name;
+    const deptObj: any = Array.isArray(c) ? c[0]?.departments : c?.departments;
+    const departmentCode = (Array.isArray(deptObj) ? deptObj[0]?.code : deptObj?.code) || "CSE";
+    const yearSem = Array.isArray(c)
+      ? `${c[0]?.year_of_study || "3rd Yr"} / ${c[0]?.semester || "5th Sem"}`
+      : `${c?.year_of_study || "3rd Yr"} / ${c?.semester || "5th Sem"}`;
+    const ayObj: any = offering?.academic_years;
+    const academicYear = (Array.isArray(ayObj) ? ayObj[0]?.year_label : ayObj?.year_label) || "2025-26";
+    const section = offering?.section || "A";
 
-      // C. Query persisted marks for the enrolled students
-      const { marks } = await offeringStore.getMarks(id);
+    const dbScheme: any = Array.isArray(offering?.attainment_schemes) ? offering?.attainment_schemes[0] : offering?.attainment_schemes;
 
-      // Build real student records matching only enrolled students
-      studentRecords = roster.map((student) => {
-        const stMark = marks.find(
-          (m) => String(m.roll_no).trim().toLowerCase() === String(student.roll_no).trim().toLowerCase()
-        );
-        return {
-          student_id: student.id,
-          roll_no: student.roll_no,
-          student_name: student.student_name,
-          marks: (stMark?.marks || {}) as Record<string, any>,
-        };
-      });
+    // B. Query actual enrolled students
+    const roster = await offeringStore.getRoster(id);
+    if (!roster || roster.length === 0) {
+      return NextResponse.json(
+        { error: "Cannot generate report: Offering has no enrolled students. Please enroll students in the roster first." },
+        { status: 400 }
+      );
     }
 
-    // D. Calculate attainment results using approved engine
-    const engine = new AttainmentEngine(schemeOverrides);
-    const componentConfigs: ComponentConfig[] = [
-      { key: "mt1_co1", label: "MT1 CO1", category: "MID_TERM_1", max_marks: 10, co_code: "CO1" },
-      { key: "mt1_co2", label: "MT1 CO2", category: "MID_TERM_1", max_marks: 10, co_code: "CO2" },
-      { key: "mt1_co3", label: "MT1 CO3", category: "MID_TERM_1", max_marks: 10, co_code: "CO3" },
-      { key: "mt2_co4", label: "MT2 CO4", category: "MID_TERM_2", max_marks: 10, co_code: "CO4" },
-      { key: "mt2_co5", label: "MT2 CO5", category: "MID_TERM_2", max_marks: 10, co_code: "CO5" },
-      { key: "mt2_co6", label: "MT2 CO6", category: "MID_TERM_2", max_marks: 10, co_code: "CO6" },
-      { key: "ta", label: "TA", category: "TEACHER_ASSESSMENT", max_marks: 10 },
-      { key: "ese_co1", label: "ESE CO1", category: "END_SEM", max_marks: 10, co_code: "CO1" },
-      { key: "ese_co2", label: "ESE CO2", category: "END_SEM", max_marks: 12, co_code: "CO2" },
-      { key: "ese_co3", label: "ESE CO3", category: "END_SEM", max_marks: 12, co_code: "CO3" },
-      { key: "ese_co4", label: "ESE CO4", category: "END_SEM", max_marks: 10, co_code: "CO4" },
-      { key: "ese_co5", label: "ESE CO5", category: "END_SEM", max_marks: 8, co_code: "CO5" },
-      { key: "ese_co6", label: "ESE CO6", category: "END_SEM", max_marks: 8, co_code: "CO6" },
-    ];
+    // C. Query persisted marks for enrolled students
+    const { marks } = await offeringStore.getMarks(id);
 
+    const studentRecords = roster.map((student) => {
+      const stMark = marks.find(
+        (m) => String(m.roll_no).trim().toLowerCase() === String(student.roll_no).trim().toLowerCase()
+      );
+      return {
+        roll_no: student.roll_no,
+        student_name: student.student_name,
+        marks: (stMark?.marks || {}) as Record<string, any>,
+      };
+    });
+
+    // D. Fetch components and mappings from database
+    const { data: dbComps } = await db
+      .from("assessment_components")
+      .select("id, component_name, category, max_marks, sort_order")
+      .eq("course_offering_id", id)
+      .order("sort_order", { ascending: true });
+
+    const componentConfigs: ComponentConfig[] = (dbComps && dbComps.length > 0)
+      ? dbComps.map((comp: any) => ({
+          key: normalizeComponentKey(comp.component_name),
+          label: comp.component_name,
+          category: comp.category,
+          max_marks: Number(comp.max_marks),
+        }))
+      : [
+          { key: "mt1_co1", label: "MT1 CO1", category: "MID_TERM_1", max_marks: 10, co_code: "CO1" },
+          { key: "mt1_co2", label: "MT1 CO2", category: "MID_TERM_1", max_marks: 10, co_code: "CO2" },
+          { key: "mt1_co3", label: "MT1 CO3", category: "MID_TERM_1", max_marks: 10, co_code: "CO3" },
+          { key: "mt2_co4", label: "MT2 CO4", category: "MID_TERM_2", max_marks: 10, co_code: "CO4" },
+          { key: "mt2_co5", label: "MT2 CO5", category: "MID_TERM_2", max_marks: 10, co_code: "CO5" },
+          { key: "mt2_co6", label: "MT2 CO6", category: "MID_TERM_2", max_marks: 10, co_code: "CO6" },
+          { key: "ta", label: "TA", category: "TEACHER_ASSESSMENT", max_marks: 10 },
+          { key: "ese_co1", label: "ESE CO1", category: "END_SEM", max_marks: 10, co_code: "CO1" },
+          { key: "ese_co2", label: "ESE CO2", category: "END_SEM", max_marks: 12, co_code: "CO2" },
+          { key: "ese_co3", label: "ESE CO3", category: "END_SEM", max_marks: 12, co_code: "CO3" },
+          { key: "ese_co4", label: "ESE CO4", category: "END_SEM", max_marks: 10, co_code: "CO4" },
+          { key: "ese_co5", label: "ESE CO5", category: "END_SEM", max_marks: 8, co_code: "CO5" },
+          { key: "ese_co6", label: "ESE CO6", category: "END_SEM", max_marks: 8, co_code: "CO6" },
+        ];
+
+    // E. Execute authoritative calculation engine
+    const schemeConfig: Partial<SchemeConfig> = {
+      threshold_percent: Number(dbScheme?.threshold_percent ?? 45.0),
+      level_3_threshold: Number(dbScheme?.level_3_threshold ?? 55.0),
+      level_2_threshold: Number(dbScheme?.level_2_threshold ?? 45.0),
+      iam_weight: Number(dbScheme?.iam_weight ?? 0.4),
+      esam_weight: Number(dbScheme?.esam_weight ?? 0.6),
+      direct_weight: Number(dbScheme?.direct_weight ?? 0.8),
+      indirect_weight: Number(dbScheme?.indirect_weight ?? 0.2),
+      po_aggregation_method: (dbScheme?.po_aggregation_method ?? "WEIGHTED_AVERAGE") as any,
+    };
+
+    const engine = new AttainmentEngine(schemeConfig);
     const coCodes = INITIAL_COS.map((c) => c.co_code);
     const poList = INITIAL_POS.map((p) => ({ po_code: p.po_code, po_type: p.po_type }));
 
     const calculationResult = engine.calculate(
-      studentRecords,
+      studentRecords.map((s, idx) => ({
+        student_id: s.roll_no,
+        roll_no: s.roll_no,
+        student_name: s.student_name,
+        marks: s.marks,
+      })),
       componentConfigs,
       coCodes,
       poList,
@@ -267,7 +302,7 @@ export async function POST(
       course_code: courseCode,
       course_name: courseName,
       department: departmentCode,
-      year_semester: yearSemester,
+      year_semester: yearSem,
       academic_year: academicYear,
       section: section,
       po_results: calculationResult.po_results.map((po) => ({
@@ -276,10 +311,8 @@ export async function POST(
       })),
     };
 
-    // E. Setup export directories and files
-    const exportsDir = process.env.VERCEL
-      ? path.join(require("os").tmpdir(), "exports")
-      : path.join(process.cwd(), "exports");
+    // F. Generate Excel Workbook
+    const exportsDir = path.join(process.cwd(), "exports");
     if (!fs.existsSync(exportsDir)) {
       fs.mkdirSync(exportsDir, { recursive: true });
     }
@@ -288,91 +321,79 @@ export async function POST(
     const filename = `OutcomeX_Report_${schemeType}_${sanitizedCourseCode}_${Date.now()}.xlsx`;
     const outputPath = path.join(exportsDir, filename);
 
-    // Call pure TypeScript ExcelJS generator (compatible with Vercel serverless Linux, Windows, macOS)
-    const { generateExcelReport } = await import("@/lib/excel/excelGenerator");
-    try {
-      await generateExcelReport(
-        schemeType,
-        courseData,
-        studentRecords,
-        outputPath
-      );
-    } catch (genErr: any) {
-      return NextResponse.json(
-        { error: `Excel generation failed: ${genErr.message}` },
-        { status: 500 }
-      );
-    }
+    const genResult = await generateExcelReport(
+      schemeType,
+      courseData,
+      studentRecords,
+      outputPath
+    );
 
-    if (!fs.existsSync(outputPath)) {
-      return NextResponse.json(
-        { error: "Generated workbook file was not created by the adapter." },
-        { status: 500 }
-      );
-    }
+    const reportRunId = crypto.randomUUID();
 
-    const stats = fs.statSync(outputPath);
-    const fileBuffer = fs.readFileSync(outputPath);
-    const fileSha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
-
-    const historyItem: ReportHistoryItem = {
-      id: `rep-${Date.now()}`,
-      offering_id: id,
-      template_name: schemeType === "60_40" ? "Autonomous 60/40 Scheme" : "Autonomous 30/20 Scheme",
-      filename: filename,
-      file_size_bytes: stats.size,
-      sha256: fileSha256,
-      status: "COMPLETED",
-      workflow_status: "CALCULATED",
-      generated_at: new Date().toISOString(),
-      repaired_formulas: schemeType === "30_20" ? ["Y7:AB7", "Y4:AB5", "G27:H27", "G94:H94"] : undefined,
-    };
-
-    reportHistory.unshift(historyItem);
-
-    // Persist to Supabase report_runs table
-    try {
-      await db.from("report_runs").insert({
-        course_offering_id: validOfferingUuid,
-        template_version_id: schemeType === "30_20" ? "t0000000-0000-0000-0000-000000000002" : "t0000000-0000-0000-0000-000000000001",
-        generated_by: "u0000000-0000-0000-0000-000000000001",
+    // G. Persist durable report record into PostgreSQL report_runs table
+    const { data: insertedReport, error: repErr } = await db
+      .from("report_runs")
+      .insert({
+        id: reportRunId,
+        course_offering_id: id,
+        template_version_id: schemeType === "30_20"
+          ? "70000000-0000-0000-0000-000000000002"
+          : "70000000-0000-0000-0000-000000000001",
+        generated_by: authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null,
         calculation_snapshot: {
           scheme: schemeType,
           student_count: studentRecords.length,
-          generated_file: historyItem.filename,
+          generated_file: filename,
           summary: calculationResult.summary,
         },
         storage_file_path: outputPath,
-        file_checksum: historyItem.sha256,
+        file_checksum: genResult.sha256,
         status: "COMPLETED",
         workflow_status: "CALCULATED",
-      });
-    } catch {}
+      })
+      .select()
+      .single();
 
-    // Record immutable audit entry
+    if (repErr) {
+      throw new Error(`Failed to persist report run in database: ${repErr.message}`);
+    }
+
+    // H. Record immutable audit log
     try {
-      const { logAuditEvent } = await import("@/lib/audit/auditLogger");
-      logAuditEvent({
-        offering_id: id,
-        user_email: userEmail,
+      await db.from("audit_logs").insert({
+        profile_id: authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null,
         action: "REPORT_GENERATED",
         resource_type: "report_runs",
-        resource_id: historyItem.id,
+        resource_id: reportRunId,
         payload: {
+          offering_id: id,
+          user_email: authCtx.user.email,
           scheme_type: schemeType,
-          filename: historyItem.filename,
+          filename,
           student_count: studentRecords.length,
-          file_size_bytes: stats.size,
-          sha256: historyItem.sha256,
-          repaired_formulas: historyItem.repaired_formulas || [],
+          file_size_bytes: genResult.file_size_bytes,
+          sha256: genResult.sha256,
         },
       });
     } catch {}
+
+    const historyItem: ReportHistoryItem = {
+      id: reportRunId,
+      offering_id: id,
+      template_name: schemeType === "60_40" ? "Autonomous 60/40 Scheme" : "Autonomous 30/20 Scheme",
+      filename,
+      file_size_bytes: genResult.file_size_bytes,
+      sha256: genResult.sha256,
+      status: "COMPLETED",
+      workflow_status: "CALCULATED",
+      generated_at: new Date().toISOString(),
+      repaired_formulas: genResult.repaired_formulas,
+    };
 
     return NextResponse.json({
       success: true,
       report: historyItem,
-      download_url: `/api/v1/reports/download?filename=${encodeURIComponent(historyItem.filename)}`,
+      download_url: `/api/v1/reports/download?report_id=${reportRunId}&filename=${encodeURIComponent(filename)}`,
     });
   } catch (err: any) {
     return NextResponse.json(
@@ -387,38 +408,78 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  let history = reportHistory.filter((r) => r.offering_id === id);
+
+  if (!isValidUuid(id)) {
+    return NextResponse.json({ offering_id: id, history: [] });
+  }
 
   try {
+    const authCtx = await getAuthenticatedUser(request);
+    if (!authCtx) {
+      return NextResponse.json(
+        { error: "Authentication required to view report history." },
+        { status: 401 }
+      );
+    }
+
+    const authCheck = await authorizeOfferingAccess(authCtx, id);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { error: authCheck.reason || "Unauthorized to view report history." },
+        { status: 403 }
+      );
+    }
+
     const db = await getDbClient();
-    const validOfferingUuid = toValidUuid(id);
     const { data: dbReports, error } = await db
       .from("report_runs")
       .select("*")
-      .eq("course_offering_id", validOfferingUuid)
+      .eq("course_offering_id", id)
       .order("created_at", { ascending: false });
 
-    if (!error && dbReports && dbReports.length > 0) {
-      const mapped = dbReports.map((r: any) => ({
-        id: r.id,
-        offering_id: r.course_offering_id || id,
-        template_name: r.template_version_id?.includes("30") ? "Autonomous 30/20 Scheme" : "Autonomous 60/40 Scheme",
-        filename: path.basename(r.storage_file_path || "Attainment_Report.xlsx"),
-        file_size_bytes: 233338,
-        sha256: r.file_checksum || "497f4d82b76337c5826027f606e635489777ee9f8b95c26e878e84c45a6ad477",
-        status: r.status || "COMPLETED",
-        workflow_status: r.workflow_status || "CALCULATED",
-        generated_at: r.created_at,
-        reviewer_comments: r.reviewer_comments || null,
-        reopen_reason: r.reopen_reason || null,
-      }));
-      history = mapped;
+    if (error) {
+      throw new Error(`Database error querying report history: ${error.message}`);
     }
-  } catch {}
 
-  return NextResponse.json({
-    offering_id: id,
-    history,
-  });
+    const history: ReportHistoryItem[] = (dbReports || []).map((r: any) => {
+      const filename = path.basename(r.storage_file_path || "Attainment_Report.xlsx");
+      let fileSize = 233338;
+      if (r.storage_file_path && fs.existsSync(r.storage_file_path)) {
+        try {
+          fileSize = fs.statSync(r.storage_file_path).size;
+        } catch {}
+      }
+
+      return {
+        id: r.id,
+        offering_id: r.course_offering_id,
+        template_name: r.template_version_id?.includes("2")
+          ? "Autonomous 30/20 Scheme"
+          : "Autonomous 60/40 Scheme",
+        filename,
+        file_size_bytes: fileSize,
+        sha256: r.file_checksum || "497f4d82b76337c5826027f606e635489777ee9f8b95c26e878e84c45a6ad477",
+        status: (r.status as any) || "COMPLETED",
+        workflow_status: (r.workflow_status as any) || "CALCULATED",
+        generated_at: r.created_at,
+        submitted_at: r.submitted_at,
+        reviewed_at: r.reviewed_at,
+        reviewer_comments: r.reviewer_comments,
+        locked_at: r.locked_at,
+        reopened_at: r.reopened_at,
+        reopen_reason: r.reopen_reason,
+      };
+    });
+
+    return NextResponse.json({
+      offering_id: id,
+      count: history.length,
+      history,
+    });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err.message || "Failed to load report history" },
+      { status: 500 }
+    );
+  }
 }
-

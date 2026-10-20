@@ -130,119 +130,156 @@ export default function AttainmentPage() {
           </div>
 
           {/* Quick Metrics Bar */}
-          {data && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-                <span className="text-xs font-medium text-slate-500">CO Attainment Status</span>
-                <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-1 flex items-center gap-1.5">
-                  <CheckCircle2 className="h-5 w-5" />
-                  100% Level 3
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">All 6 COs attained target</p>
-              </div>
+          {data && (() => {
+            const coCount = data.co_results?.length || 0;
+            const targetMetCount = data.co_results?.filter((c) => c.class_percentage >= 50).length || 0;
+            const pctMet = coCount > 0 ? Math.round((targetMetCount / coCount) * 100) : 0;
 
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-                <span className="text-xs font-medium text-slate-500">Average Final Attainment</span>
-                <p className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                  {data.summary.average_final_co_attainment.toFixed(2)} / 3.00
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">80% Direct + 20% Indirect</p>
-              </div>
+            return (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+                  <span className="text-xs font-medium text-slate-500">CO Attainment Status</span>
+                  <p className={`text-xl font-bold mt-1 flex items-center gap-1.5 ${pctMet >= 80 ? "text-emerald-600 dark:text-emerald-400" : pctMet >= 50 ? "text-amber-600 dark:text-amber-400" : "text-rose-600 dark:text-rose-400"}`}>
+                    <CheckCircle2 className="h-5 w-5" />
+                    {coCount > 0 ? `${pctMet}% Target Met` : "No CO Data"}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    {coCount > 0 ? `${targetMetCount} of ${coCount} COs attained target` : "No outcomes configured"}
+                  </p>
+                </div>
 
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-                <span className="text-xs font-medium text-slate-500">Highest Attained CO</span>
-                <p className="text-xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">
-                  {data.summary.highest_attained_co}
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  {data.co_results.find((c) => c.co_code === data.summary.highest_attained_co)?.class_percentage.toFixed(1)}% students attained
-                </p>
-              </div>
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+                  <span className="text-xs font-medium text-slate-500">Average Final Attainment</span>
+                  <p className="text-xl font-bold text-slate-900 dark:text-white mt-1">
+                    {data.summary ? `${data.summary.average_final_co_attainment.toFixed(2)} / 3.00` : "-"}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">80% Direct + 20% Indirect</p>
+                </div>
 
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
-                <span className="text-xs font-medium text-slate-500">Evaluated Cohort</span>
-                <p className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                  {data.total_students_enrolled} Students
-                </p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Threshold: 45% of component max</p>
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+                  <span className="text-xs font-medium text-slate-500">Highest Attained CO</span>
+                  <p className="text-xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">
+                    {data.summary?.highest_attained_co || "-"}
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    {data.co_results?.find((c) => c.co_code === data.summary?.highest_attained_co)?.class_percentage?.toFixed(1) || "0"}% students attained
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
+                  <span className="text-xs font-medium text-slate-500">Evaluated Cohort</span>
+                  <p className="text-xl font-bold text-slate-900 dark:text-white mt-1">
+                    {data.total_students_enrolled} Students
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">Threshold: 45% of component max</p>
+                </div>
               </div>
+            );
+          })()}
+
+          {loading && (
+            <div className="py-20 text-center">
+              <RefreshCw className="h-8 w-8 text-sky-600 animate-spin mx-auto mb-3" />
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">Calculating OBE Attainment...</p>
+              <p className="text-xs text-slate-400 mt-1">Aggregating component marks and outcomes from database</p>
+            </div>
+          )}
+
+          {!loading && (!data || !data.co_results || data.co_results.length === 0) && (
+            <div className="py-16 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl bg-white dark:bg-slate-900 p-8">
+              <Target className="h-10 w-10 text-slate-400 mx-auto mb-3" />
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">No Attainment Calculations Recorded</h3>
+              <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                No marks have been recorded for this course offering yet. Enter or import marks to generate complete OBE attainment analysis.
+              </p>
+              <Link
+                href="/marks"
+                className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-sky-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-sky-500 transition-colors"
+              >
+                <FileSpreadsheet className="h-4 w-4" />
+                Go to Marks Entry
+              </Link>
             </div>
           )}
 
           {/* Navigation Tabs */}
-          <div className="flex border-b border-slate-200 dark:border-slate-800 gap-2 overflow-x-auto">
-            {[
-              { id: "overview", label: "Final Attainment Overview" },
-              { id: "breakdown", label: "Calculation Inspection & Breakdown" },
-              { id: "components", label: "Assessment Component Stats" },
-              { id: "students", label: "Student Performance Sheet" },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
-                className={`py-3 px-4 text-xs font-semibold border-b-2 transition-all whitespace-nowrap ${
-                  activeTab === tab.id
-                    ? "border-sky-600 text-sky-600 dark:text-sky-400 font-bold"
-                    : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          {!loading && data && data.co_results && data.co_results.length > 0 && (
+            <>
+              <div className="flex border-b border-slate-200 dark:border-slate-800 gap-2 overflow-x-auto">
+                {[
+                  { id: "overview", label: "Final Attainment Overview" },
+                  { id: "breakdown", label: "Calculation Inspection & Breakdown" },
+                  { id: "components", label: "Assessment Component Stats" },
+                  { id: "students", label: "Student Performance Sheet" },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id as any)}
+                    className={`py-3 px-4 text-xs font-semibold border-b-2 transition-all whitespace-nowrap ${
+                      activeTab === tab.id
+                        ? "border-sky-600 text-sky-600 dark:text-sky-400 font-bold"
+                        : "border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
 
-          {/* TAB 1: OVERVIEW */}
-          {activeTab === "overview" && data && (
-            <div className="space-y-6">
-              {/* Course Outcomes Table */}
-              <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xs space-y-4">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                    Course Outcomes (CO) Attainment Levels
-                  </h2>
-                  <span className="text-xs text-slate-500">Autonomous 60/40 Scheme</span>
-                </div>
+              {/* TAB 1: OVERVIEW */}
+              {activeTab === "overview" && data && (
+                <div className="space-y-6">
+                  {/* Course Outcomes Table */}
+                  <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xs space-y-4">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                        Course Outcomes (CO) Attainment Levels
+                      </h2>
+                      <span className="text-xs text-slate-500">Autonomous 60/40 Scheme</span>
+                    </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-400 uppercase font-semibold">
-                        <th className="py-2.5 px-3">CO Code</th>
-                        <th className="py-2.5 px-3 text-center">Attained Students (≥45%)</th>
-                        <th className="py-2.5 px-3 text-center">Class Attained %</th>
-                        <th className="py-2.5 px-3 text-center">Direct Level</th>
-                        <th className="py-2.5 px-3 text-center">Indirect Level</th>
-                        <th className="py-2.5 px-3 text-center font-bold">Final Attainment</th>
-                        <th className="py-2.5 px-3 text-center">Attainment Level</th>
-                        <th className="py-2.5 px-3 text-center">Inspect</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-mono">
-                      {data.co_results.map((co) => (
-                        <tr key={co.co_code} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
-                          <td className="py-3 px-3 font-bold text-slate-900 dark:text-white font-sans">
-                            {co.co_code}
-                          </td>
-                          <td className="py-3 px-3 text-center text-slate-700 dark:text-slate-300">
-                            {co.attained_students} / {co.total_students}
-                          </td>
-                          <td className="py-3 px-3 text-center font-bold text-slate-900 dark:text-white">
-                            {co.class_percentage.toFixed(1)}%
-                          </td>
-                          <td className="py-3 px-3 text-center text-slate-600 dark:text-slate-400">
-                            {co.direct_level.toFixed(1)}
-                          </td>
-                          <td className="py-3 px-3 text-center text-slate-600 dark:text-slate-400">
-                            {co.indirect_level.toFixed(1)}
-                          </td>
-                          <td className="py-3 px-3 text-center font-extrabold text-slate-900 dark:text-white">
-                            {co.final_attainment.toFixed(2)}
-                          </td>
-                          <td className="py-3 px-3 text-center font-sans">
-                            <span className="inline-block rounded-md px-2 py-0.5 text-xs font-bold badge-level-3">
-                              Level {co.direct_level}
-                            </span>
-                          </td>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-400 uppercase font-semibold">
+                            <th className="py-2.5 px-3">CO Code</th>
+                            <th className="py-2.5 px-3 text-center">Attained Students (≥45%)</th>
+                            <th className="py-2.5 px-3 text-center">Class Attained %</th>
+                            <th className="py-2.5 px-3 text-center">Direct Level</th>
+                            <th className="py-2.5 px-3 text-center">Indirect Level</th>
+                            <th className="py-2.5 px-3 text-center font-bold">Final Attainment</th>
+                            <th className="py-2.5 px-3 text-center">Attainment Level</th>
+                            <th className="py-2.5 px-3 text-center">Inspect</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-mono">
+                          {data.co_results.map((co) => (
+                            <tr key={co.co_code} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                              <td className="py-3 px-3 font-bold text-slate-900 dark:text-white font-sans">
+                                {co.co_code}
+                              </td>
+                              <td className="py-3 px-3 text-center text-slate-700 dark:text-slate-300">
+                                {co.attained_students} / {co.total_students}
+                              </td>
+                              <td className="py-3 px-3 text-center font-bold text-slate-900 dark:text-white">
+                                {co.class_percentage.toFixed(1)}%
+                              </td>
+                              <td className="py-3 px-3 text-center text-slate-600 dark:text-slate-400">
+                                {co.direct_level.toFixed(1)}
+                              </td>
+                              <td className="py-3 px-3 text-center text-slate-600 dark:text-slate-400">
+                                {co.indirect_level.toFixed(1)}
+                              </td>
+                              <td className="py-3 px-3 text-center font-extrabold text-slate-900 dark:text-white">
+                                {co.final_attainment.toFixed(2)}
+                              </td>
+                              <td className="py-3 px-3 text-center font-sans">
+                                <span className={`inline-block rounded-md px-2 py-0.5 text-xs font-bold ${
+                                  co.direct_level >= 2.5 ? "badge-level-3" : co.direct_level >= 1.5 ? "badge-level-2" : "badge-level-1"
+                                }`}>
+                                  Level {Math.round(co.direct_level)}
+                                </span>
+                              </td>
                           <td className="py-3 px-3 text-center font-sans">
                             <button
                               onClick={() => {
@@ -555,6 +592,8 @@ export default function AttainmentPage() {
                 </table>
               </div>
             </div>
+          )}
+            </>
           )}
         </main>
       </div>

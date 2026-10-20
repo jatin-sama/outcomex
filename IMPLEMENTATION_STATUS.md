@@ -194,15 +194,80 @@ OutcomeX is ready for faculty and administrative deployment.
 
 ### Verification & Test Results
 - **Automated Regression Suite (`tests/test_e2e_roster_marks_integration.py`)**:
-  Passed all tests verifying newly enrolled students appear in marks grids and drive component/CO/PO calculations. Total Python tests: **67/67 PASSED**.
+  Passed all tests verifying newly enrolled students appear in marks grids and drive component/CO/PO calculations. Total Python tests: **74/74 PASSED**.
+- **Independent QA Engine Parity Suite (`tests/test_qa_independent_engine.mjs`)**:
+  Passed all 13 independently computed edge case tests: **13/13 PASSED**.
 - **Live HTTP End-to-End Test (`verify_live_e2e_integration.mjs`)**:
   1. Checked initial roster: 81 students.
-  2. Added test student Roll 999 ("DEMO TEST STUDENT") &rarr; 200 OK, total roster: 82.
-  3. Queried Marks Entry &rarr; Student 999 was present in gradebook.
-  4. Entered marks for 999 (`mt1_co1: 9.0, mt1_co2: 8.0, ese_co1: 8.5, ta: 10.0`) &rarr; 200 OK.
-  5. Verified marks persistence after simulated reload &rarr; 200 OK, marks preserved.
-  6. Calculated attainment using saved marks &rarr; 200 OK, evaluated all 82 students.
-  7. Cleaned up test student &rarr; Restored roster count to 81.
+  2. Added test student Roll 999 ("DEMO TEST STUDENT") → 200 OK, total roster: 82.
+  3. Queried Marks Entry → Student 999 was present in gradebook.
+  4. Entered marks for 999 (`mt1_co1: 9.0, mt1_co2: 8.0, ese_co1: 8.5, ta: 10.0`) → 200 OK.
+  5. Verified marks persistence after simulated reload → 200 OK, marks preserved.
+  6. Calculated attainment using saved marks → 200 OK, evaluated all 82 students.
+  7. Cleaned up test student → Restored roster count to 81.
 - **TypeScript Typecheck (`npx tsc --noEmit`)**: 0 errors.
-- **Production Build (`npm run build`)**: Code 0 (all 24 static and dynamic routes compiled successfully).
+- **Production Build (`npm run build`)**: Code 0 (all 25 static and dynamic routes compiled successfully).
+
+---
+
+## 7. Master Application Repair & Completion Mission (P0 & P1 Execution)
+
+### Phase A: Canonical Data Layer & PostgreSQL Authoritative Persistence
+- **Eliminated In-Memory Fallbacks:** Completely removed synthetic in-memory fallback stores and `toValidUuid` non-hex string conversion from production data paths.
+- **UUID Standards:** Updated `src/lib/data/initialData.ts` to use valid RFC 4122 hexadecimal UUID strings (`60000...`, `f0000...`, `b0000...`, `e0000...`).
+- **Separation of Student & Enrollment Identity:** Enrolling a student generates an independent enrollment UUID in `public.enrollments` linked to `course_offering_id` and `student_id`. Enrolling in multiple offerings preserves independent enrollment histories.
+- **Transactional DB Mutations & Error Propagation:** Database errors are never swallowed; `offeringStore` verifies row counts and throws explicit HTTP 400/500 structured errors.
+
+### Phase B: Student Roster, Marks Persistence & Component Alignment
+- **Component Identifier Mapping:** Validated mapping between UI keys (`mt1_co1`, `ese_co5`) and database `assessment_components.component_name`.
+- **Durable Marks Upserts:** Marks mutations are batched and persisted to `public.student_marks` with `onConflict: "enrollment_id,assessment_component_id"`, surviving page refreshes and session restarts.
+- **Absence & Missing Value Preservation:** Distinct handling for empty (unentered), absent (`A`), and numeric scores (0 to max).
+
+### Phase C: Security, Server-Side Authorization & Strict RLS
+- **Migration 06 (`supabase/migrations/20261021000006_fix_privilege_escalation_and_strict_rls.sql`):**
+  - Revoked permissive `*_authenticated_all` policies from Migration 05 that previously granted global access to any authenticated user.
+  - Repaired `handle_new_user()` trigger to assign least-privilege `teacher` role by default.
+  - Implemented strict RLS policies on `course_offerings`, `student_marks`, `report_runs`, and `audit_logs` scoped to offering assignment and department authority.
+- **Server-Side Authorization Helper (`src/lib/auth/authHelper.ts`):**
+  - Session verification using Supabase auth tokens.
+  - Strict role checks (`teacher`, `course_coordinator`, `hod`, `admin`).
+  - Offering boundary validation preventing teachers from reading or writing unauthorized offerings.
+  - Report download security: session check, offering authorization, strict path sanitization within `exports/`, path traversal defense (`..` rejection), and audit logging.
+
+### Phase D: Calculation Parity & Dynamic Offering Configuration
+- **Dynamic Calculation Inputs:** Rewritten `src/app/api/v1/offerings/[id]/calculate/route.ts` to query PostgreSQL for offering metadata, course outcomes, assessment components, marks, CO-PO mappings, and indirect survey results.
+- **Dual PO Aggregation Modes:** Explicitly supports both `WEIGHTED_AVERAGE` and `MAPPING_AVERAGE` modes without silent defaulting.
+- **Independent QA Engine Tests:** Verified calculation parity against independent formulas with 13/13 passing tests.
+
+### Phase E: Real Excel/CSV Import & Full-Cohort Ingestion
+- **ExcelJS Binary Parsing:** Replaced plain-text `readAsText` in `src/app/marks/page.tsx` with `ExcelJS.Workbook.xlsx.load(buffer)`.
+- **Full Cohort Ingestion:** Removed the 15-row preview slice limitation. The confirmation workflow commits the entire validated cohort.
+- **Validation & Anomaly Detection:** Flags marks exceeding maximum limits (e.g. Roll 138's 19/10, Roll 218's 9/8), duplicate rolls, and malformed scores.
+
+### Phase F: Database-Backed Excel Export & Template Preservation
+- **Authoritative Data Injection:** `src/app/api/v1/offerings/[id]/export/route.ts` injects verified database-derived rosters and marks.
+- **Master Template Preservation:** Preserved `reference/Autonomous_Attainment_IDS_3rd _25_26 (2).xlsx` (SHA-256 `497f4d82...`).
+- **Explicit Cohort Capacity Protection:** Throws capacity error when student count exceeds template rows (max 81 for 60/40, max 65 for 30/20) instead of silently truncating students.
+- **Repaired Template References:** Fixed `#REF!` formulas and row references in 30/20 scheme.
+
+### Phase G: Durable Report History & Approval Governance
+- **PostgreSQL Persistence:** Report metadata and calculation snapshots are saved to `public.report_runs`.
+- **Audited State Transitions:** Enforces workflow lifecycle: `DRAFT` → `CALCULATED` → `SUBMITTED` → `APPROVED` → `LOCKED`.
+- **Immutable Audit Trail:** All critical operations (marks update, calculation, export, status transition) are logged to `public.audit_logs`.
+
+### Phase H: Dashboard & UI Dynamic Integration
+- **Removed Hardcoded Metrics:** Replaced static "100% Level 3" badge and hardcoded reference tables with dynamic calculation results from `calculateOfferingAttainment`.
+- **Informative Empty States:** When no marks exist for an offering, clean empty states guide the faculty to Marks Entry without showing fabricated data.
+
+---
+
+## 8. Verification & Test Summary
+
+| Test Suite / Gate | Command / Execution | Status |
+| :--- | :--- | :--- |
+| **Python Test Suite (74 tests)** | `python -m unittest discover tests` | **PASSED (74/74, 28.1s)** |
+| **Independent Engine Parity** | `node --experimental-strip-types tests/test_qa_independent_engine.mjs` | **PASSED (13/13)** |
+| **TypeScript Typecheck** | `npx tsc --noEmit` | **PASSED (0 errors)** |
+| **Next.js Production Build** | `npm run build` | **PASSED (Exit code 0, 25 routes)** |
+| **Master Excel Checksum** | SHA-256 on `reference/Autonomous_Attainment_IDS_3rd _25_26 (2).xlsx` | **VERIFIED (`497f4d82...`)** |
 

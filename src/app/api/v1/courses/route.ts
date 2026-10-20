@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { offeringStore } from "@/lib/domain/offeringStore";
+import { getAuthenticatedUser } from "@/lib/auth/authHelper";
 
 export async function GET() {
   try {
@@ -15,6 +16,14 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const authCtx = await getAuthenticatedUser(request);
+    if (!authCtx) {
+      return NextResponse.json(
+        { error: "Authentication required to create a course." },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
     const { course_code, course_name, semester, year_of_study, attainment_scheme_id, section } = body;
 
@@ -32,6 +41,7 @@ export async function POST(request: NextRequest) {
       year_of_study,
       attainment_scheme_id,
       section,
+      teacher_id: authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : undefined,
     });
 
     return NextResponse.json(
@@ -48,4 +58,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

@@ -66,9 +66,11 @@ export default async function DashboardPage() {
       `)
       .limit(5);
 
+    let activeOfferingId = DEFAULT_OFFERING_ID;
     if (offerings && offerings.length > 0) {
       activeOfferingsCount = offerings.length;
       const first: any = offerings[0];
+      activeOfferingId = first.id;
       if (first.courses) {
         activeCourseName = `${first.courses.course_name} (${first.courses.course_code})`;
         activeOfferingSection = `${first.courses.year_of_study} / ${first.courses.semester} • Section ${first.section || "A"} • Department of Computer Science & Engineering`;
@@ -84,30 +86,19 @@ export default async function DashboardPage() {
     }
   } catch {}
 
-  // Reference data extracted from Autonomous_Attainment_IDS_3rd _25_26 (2).xlsx
-  const coResults = [
-    { code: "CO1", description: "Foundational principles & workflow of data science", direct: 3.0, indirect: 3.0, final: 3.0, level: 3, percent: "88.9%" },
-    { code: "CO2", description: "Data preprocessing, wrangling & exploratory analysis", direct: 3.0, indirect: 3.0, final: 3.0, level: 3, percent: "86.4%" },
-    { code: "CO3", description: "Statistical inference and regression models", direct: 3.0, indirect: 3.0, final: 3.0, level: 3, percent: "85.2%" },
-    { code: "CO4", description: "Classification, clustering & unsupervised learning", direct: 3.0, indirect: 3.0, final: 3.0, level: 3, percent: "55.6%" },
-    { code: "CO5", description: "Model performance evaluation & validation metrics", direct: 3.0, indirect: 3.0, final: 3.0, level: 3, percent: "71.6%" },
-    { code: "CO6", description: "Communication of data-driven insights through visualization", direct: 3.0, indirect: 3.0, final: 3.0, level: 3, percent: "72.8%" },
-  ];
+  let coResults: any[] = [];
+  let poResults: any[] = [];
+  let summaryData: any = null;
 
-  const poResults = [
-    { code: "PO1", target: 3.0, achieved: 2.67, status: "High" },
-    { code: "PO2", target: 3.0, achieved: 2.67, status: "High" },
-    { code: "PO3", target: 2.0, achieved: 2.0, status: "Target Met" },
-    { code: "PO4", target: 3.0, achieved: 2.6, status: "High" },
-    { code: "PO5", target: 3.0, achieved: 2.5, status: "High" },
-    { code: "PO7", target: 2.0, achieved: 1.16, status: "Moderate" },
-    { code: "PO8", target: 1.0, achieved: 1.0, status: "Target Met" },
-    { code: "PO9", target: 3.0, achieved: 1.5, status: "Moderate" },
-    { code: "PO10", target: 1.0, achieved: 1.0, status: "Target Met" },
-    { code: "PO11", target: 3.0, achieved: 2.67, status: "High" },
-    { code: "PSO 1", target: 2.0, achieved: 2.0, status: "Target Met" },
-    { code: "PSO 2", target: 2.0, achieved: 2.0, status: "Target Met" },
-  ];
+  try {
+    const { calculateOfferingAttainment, DEFAULT_OFFERING_ID } = await import("@/lib/domain/offeringStore");
+    const calc = await calculateOfferingAttainment(DEFAULT_OFFERING_ID);
+    if (calc && calc.co_results && calc.co_results.length > 0) {
+      coResults = calc.co_results;
+      poResults = calc.po_results || [];
+      summaryData = calc.summary;
+    }
+  } catch {}
 
   return (
     <div className="min-h-screen bg-slate-50/50 dark:bg-slate-950">
@@ -169,8 +160,12 @@ export default async function DashboardPage() {
                   <Target className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
                   <span>Course Outcomes</span>
                 </div>
-                <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">6 COs</p>
-                <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">100% Attained Level 3</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
+                  {coResults.length > 0 ? `${coResults.length} COs` : "0 COs"}
+                </p>
+                <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">
+                  {summaryData ? `Avg: ${summaryData.average_final_co_attainment.toFixed(2)} / 3.00` : "Pending marks entry"}
+                </p>
               </div>
 
               <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 p-4 border border-slate-100 dark:border-slate-800">
@@ -218,23 +213,6 @@ export default async function DashboardPage() {
             </div>
           )}
 
-          {/* Data Validation Alert (Findings from Audit) */}
-          <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/80 dark:bg-amber-950/20 p-4">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-              <div className="flex-1 text-sm">
-                <h2 className="font-semibold text-amber-900 dark:text-amber-300">
-                  Data Entry Attention Items (From Reference Excel File)
-                </h2>
-                <p className="text-amber-800/90 dark:text-amber-400/90 mt-1 text-xs leading-relaxed">
-                  The automated validation engine flagged <strong>2 mark values exceeding maximum component limits</strong> in the workbook:
-                  Roll 138 (JEET LAMBAT) scored 19/10 in Mid Term-I CO2, and Roll 218 scored 9/8 in ESE CO5.
-                  The OutcomeX marks editor allows you to inspect and correct these anomalies prior to report generation.
-                </p>
-              </div>
-            </div>
-          </div>
-
           {/* Course Outcomes Attainment Grid */}
           <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
@@ -246,44 +224,75 @@ export default async function DashboardPage() {
                   Evaluated using 80% Direct Assessment (40% IAM + 60% ESE) + 20% Indirect Exit Survey
                 </p>
               </div>
-              <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800/60">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                All 6 COs Met Target
-              </span>
+              {coResults.length > 0 ? (
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800/60">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {summaryData ? `Avg Attainment: ${summaryData.average_final_co_attainment.toFixed(2)}` : "Calculated"}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-full border border-slate-200 dark:border-slate-700">
+                  Pending Marks
+                </span>
+              )}
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-100 dark:border-slate-800 text-xs font-semibold text-slate-400 uppercase">
-                    <th className="py-3 px-4">CO Code</th>
-                    <th className="py-3 px-4">Outcome Description</th>
-                    <th className="py-3 px-4 text-center">Class Attained %</th>
-                    <th className="py-3 px-4 text-center">Direct Att.</th>
-                    <th className="py-3 px-4 text-center">Indirect Att.</th>
-                    <th className="py-3 px-4 text-center">Final Attainment</th>
-                    <th className="py-3 px-4 text-center">Level</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                  {coResults.map((co) => (
-                    <tr key={co.code} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">{co.code}</td>
-                      <td className="py-3 px-4 text-slate-600 dark:text-slate-300 max-w-md">{co.description}</td>
-                      <td className="py-3 px-4 text-center font-semibold text-slate-800 dark:text-slate-200">{co.percent}</td>
-                      <td className="py-3 px-4 text-center text-slate-600 dark:text-slate-300">{co.direct.toFixed(1)}</td>
-                      <td className="py-3 px-4 text-center text-slate-600 dark:text-slate-300">{co.indirect.toFixed(1)}</td>
-                      <td className="py-3 px-4 text-center font-bold text-slate-900 dark:text-white">{co.final.toFixed(2)}</td>
-                      <td className="py-3 px-4 text-center">
-                        <span className="inline-block rounded-md px-2.5 py-0.5 text-xs font-bold badge-level-3">
-                          Level {co.level}
-                        </span>
-                      </td>
+            {coResults.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 dark:border-slate-800 text-xs font-semibold text-slate-400 uppercase">
+                      <th className="py-3 px-4">CO Code</th>
+                      <th className="py-3 px-4">Outcome Description</th>
+                      <th className="py-3 px-4 text-center">Class Attained %</th>
+                      <th className="py-3 px-4 text-center">Direct Att.</th>
+                      <th className="py-3 px-4 text-center">Indirect Att.</th>
+                      <th className="py-3 px-4 text-center">Final Attainment</th>
+                      <th className="py-3 px-4 text-center">Level</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                    {coResults.map((co) => (
+                      <tr key={co.co_code || co.code} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition-colors">
+                        <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">{co.co_code || co.code}</td>
+                        <td className="py-3 px-4 text-slate-600 dark:text-slate-300 max-w-md">{co.co_description || co.description || "-"}</td>
+                        <td className="py-3 px-4 text-center font-semibold text-slate-800 dark:text-slate-200">
+                          {typeof co.class_percentage === "number" ? `${co.class_percentage.toFixed(1)}%` : co.percent || "-"}
+                        </td>
+                        <td className="py-3 px-4 text-center text-slate-600 dark:text-slate-300">
+                          {typeof co.direct_level === "number" ? co.direct_level.toFixed(1) : typeof co.direct === "number" ? co.direct.toFixed(1) : "-"}
+                        </td>
+                        <td className="py-3 px-4 text-center text-slate-600 dark:text-slate-300">
+                          {typeof co.indirect_level === "number" ? co.indirect_level.toFixed(1) : typeof co.indirect === "number" ? co.indirect.toFixed(1) : "-"}
+                        </td>
+                        <td className="py-3 px-4 text-center font-bold text-slate-900 dark:text-white">
+                          {typeof co.final_attainment === "number" ? co.final_attainment.toFixed(2) : typeof co.final === "number" ? co.final.toFixed(2) : "-"}
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          <span className="inline-block rounded-md px-2.5 py-0.5 text-xs font-bold badge-level-3">
+                            Level {co.direct_level !== undefined ? Math.round(co.direct_level) : co.level || 0}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="py-12 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                <Target className="h-8 w-8 text-slate-400 mx-auto mb-2" />
+                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">No attainment records computed yet</p>
+                <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                  Student marks must be entered or imported to calculate Course Outcome and Program Outcome attainment.
+                </p>
+                <Link
+                  href="/marks"
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-sky-500 transition-colors"
+                >
+                  <FileSpreadsheet className="h-3.5 w-3.5" />
+                  Enter / Import Marks
+                </Link>
+              </div>
+            )}
           </div>
 
           {/* Program Outcomes (PO/PSO) Matrix Preview */}
@@ -297,22 +306,28 @@ export default async function DashboardPage() {
               </p>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-              {poResults.map((po) => (
-                <div
-                  key={po.code}
-                  className="rounded-xl border border-slate-100 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-800/40 p-3 text-center"
-                >
-                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400">{po.code}</p>
-                  <p className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
-                    {po.achieved.toFixed(2)}
-                  </p>
-                  <span className="inline-block text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-1">
-                    {po.status}
-                  </span>
-                </div>
-              ))}
-            </div>
+            {poResults.length > 0 ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                {poResults.map((po) => (
+                  <div
+                    key={po.po_code || po.code}
+                    className="rounded-xl border border-slate-100 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-800/40 p-3 text-center"
+                  >
+                    <p className="text-xs font-bold text-slate-500 dark:text-slate-400">{po.po_code || po.code}</p>
+                    <p className="text-xl font-extrabold text-slate-900 dark:text-white mt-1">
+                      {typeof po.achieved_value === "number" ? po.achieved_value.toFixed(2) : typeof po.achieved === "number" ? po.achieved.toFixed(2) : "-"}
+                    </p>
+                    <span className="inline-block text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 mt-1">
+                      {po.status || "Target Met"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-8 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-500">
+                Program Outcome attainment values will appear here after Course Outcome calculation is complete.
+              </div>
+            )}
           </div>
         </main>
       </div>

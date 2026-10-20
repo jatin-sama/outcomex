@@ -1,187 +1,152 @@
 /**
- * OutcomeX — Canonical Domain Offering Store
+ * OutcomeX — Authoritative Domain Offering Service
  * 
- * Centralized, authoritative single source of truth for course offerings,
+ * Provides centralized, server-side data access for courses, offerings,
  * rosters, marks, assessment components, and mappings.
- * Bridges Supabase PostgreSQL persistence with guaranteed in-memory consistency.
+ * Fully backed by Supabase PostgreSQL with strict UUID validation
+ * and explicit error propagation.
  */
 
+import crypto from "crypto";
 import { REFERENCE_STUDENTS, ReferenceStudent } from "@/lib/data/referenceStudents";
-import { REFERENCE_MARKS, StudentMarksRecord } from "@/lib/data/referenceMarks";
-import { INITIAL_OFFERING, INITIAL_ASSESSMENTS, INITIAL_COURSE } from "@/lib/data/initialData";
+import { INITIAL_OFFERING, INITIAL_ASSESSMENTS, INITIAL_COURSE, INITIAL_SCHEMES } from "@/lib/data/initialData";
 import { getDbClient } from "@/lib/supabase/admin";
 
-export const DEFAULT_OFFERING_ID = INITIAL_OFFERING.id; // "o0000000-0000-0000-0000-000000000001"
+export const DEFAULT_OFFERING_ID = INITIAL_OFFERING.id;
 
-// Helper to convert arbitrary string IDs (e.g. "s029" or "o000...") to valid Postgres UUIDs
-export function toValidUuid(rawId: string, fallbackSeed: string | number = "1"): string {
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawId)) {
-    return rawId;
-  }
-  // Replace non-hex prefix chars ('o', 's', 'u', etc.) with valid hex ('f', 'e', 'b', etc.)
-  if (rawId.startsWith("o0000000-")) return "f" + rawId.slice(1);
-  if (rawId.startsWith("s0000000-")) return "e" + rawId.slice(1);
-  if (rawId.startsWith("u0000000-")) return "b" + rawId.slice(1);
-
-  const digits = String(fallbackSeed).replace(/\D/g, "") || String(rawId).replace(/\D/g, "") || "1";
-  const num = parseInt(digits, 10);
-  const hexNum = (isNaN(num) ? 1 : num).toString(16).padStart(12, "0");
-  return `00000000-0000-0000-0001-${hexNum}`;
+/**
+ * Checks if a string is a valid RFC 4122 UUID.
+ */
+export function isValidUuid(str: string): boolean {
+  if (!str || typeof str !== "string") return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 }
 
-// Global in-memory storage holding synchronized offering state across API routes
-class OfferingDomainStore {
-  private rosters: Map<string, ReferenceStudent[]> = new Map();
-  private marks: Map<string, StudentMarksRecord[]> = new Map();
-  private assessments: Map<string, any[]> = new Map();
-  private courses: any[] = [];
-  private offerings: Map<string, any> = new Map();
+/**
+ * Normalizes assessment component names into canonical UI keys.
+ * Handles variations such as:
+ * "MT1 Q1 (CO1)" -> "mt1_co1"
+ * "ESE CO2" -> "ese_co2"
+ * "Teacher Assessment (TA)" -> "ta"
+ */
+export function normalizeComponentKey(name: string): string {
+  const s = String(name || "").toLowerCase().trim();
+  if (s.includes("ta") || s.includes("teacher assessment")) return "ta";
+  if (s.includes("mt1") && s.includes("co1")) return "mt1_co1";
+  if (s.includes("mt1") && s.includes("co2")) return "mt1_co2";
+  if (s.includes("mt1") && s.includes("co3")) return "mt1_co3";
+  if (s.includes("mt2") && s.includes("co3")) return "mt2_co3";
+  if (s.includes("mt2") && s.includes("co4")) return "mt2_co4";
+  if (s.includes("mt2") && s.includes("co5")) return "mt2_co5";
+  if (s.includes("mt2") && s.includes("co6")) return "mt2_co6";
+  if (s.includes("ese") && s.includes("co1")) return "ese_co1";
+  if (s.includes("ese") && s.includes("co2")) return "ese_co2";
+  if (s.includes("ese") && s.includes("co3")) return "ese_co3";
+  if (s.includes("ese") && s.includes("co4")) return "ese_co4";
+  if (s.includes("ese") && s.includes("co5")) return "ese_co5";
+  if (s.includes("ese") && s.includes("co6")) return "ese_co6";
+  return s.replace(/[^a-z0-9_]/g, "_");
+}
 
-  constructor() {
-    this.rosters.set(DEFAULT_OFFERING_ID, []);
-    this.marks.set(DEFAULT_OFFERING_ID, []);
-    this.assessments.set(DEFAULT_OFFERING_ID, JSON.parse(JSON.stringify(INITIAL_ASSESSMENTS)));
+export interface StudentMarksRecord {
+  student_id: string;
+  enrollment_id?: string;
+  roll_no: string;
+  student_name: string;
+  marks: Record<string, number | string | null>;
+}
 
-    const defaultOffering = {
-      id: INITIAL_OFFERING.id,
-      course_id: INITIAL_COURSE.id,
-      academic_year_id: INITIAL_OFFERING.academic_year_id,
-      teacher_id: INITIAL_OFFERING.teacher_id,
-      section: INITIAL_OFFERING.section,
-      attainment_scheme_id: INITIAL_OFFERING.attainment_scheme_id,
-      created_at: INITIAL_OFFERING.created_at,
-      updated_at: INITIAL_OFFERING.updated_at,
-    };
-
-    this.courses = [
-      {
-        id: INITIAL_COURSE.id,
-        department_id: INITIAL_COURSE.department_id,
-        course_code: INITIAL_COURSE.course_code,
-        course_name: INITIAL_COURSE.course_name,
-        semester: INITIAL_COURSE.semester,
-        year_of_study: INITIAL_COURSE.year_of_study,
-        created_at: INITIAL_COURSE.created_at,
-        updated_at: INITIAL_COURSE.updated_at,
-        schemeName: "Autonomous 60/40 Scheme",
-        cosCount: 6,
-        offering: defaultOffering,
-      },
-    ];
-    this.offerings.set(DEFAULT_OFFERING_ID, defaultOffering);
-  }
-
+class OfferingDomainService {
   /**
-   * Resolves an ID to a course offering ID.
-   * If a course ID was passed by mistake, resolves to that course's offering ID.
+   * Resolves offering ID ensuring it is valid.
    */
   resolveOfferingId(idOrOfferingId: string): string {
     if (!idOrOfferingId) return DEFAULT_OFFERING_ID;
-    if (this.offerings.has(idOrOfferingId)) return idOrOfferingId;
-    const match = this.courses.find((c) => c.id === idOrOfferingId || c.offering?.id === idOrOfferingId);
-    if (match?.offering?.id) return match.offering.id;
-    return idOrOfferingId;
+    if (isValidUuid(idOrOfferingId)) return idOrOfferingId;
+    return DEFAULT_OFFERING_ID;
   }
 
   /**
-   * Get all courses with their offerings and actual enrolled students count.
+   * Query all courses with their course offerings and active student counts from PostgreSQL.
    */
   async getCourses(): Promise<any[]> {
-    try {
-      const db = await getDbClient();
-      const { data: dbCourses, error } = await db
-        .from("courses")
-        .select(`
+    const db = await getDbClient();
+    const { data: dbCourses, error } = await db
+      .from("courses")
+      .select(`
+        id,
+        department_id,
+        course_code,
+        course_name,
+        semester,
+        year_of_study,
+        created_at,
+        updated_at,
+        course_offerings (
           id,
-          department_id,
-          course_code,
-          course_name,
-          semester,
-          year_of_study,
+          academic_year_id,
+          teacher_id,
+          section,
+          attainment_scheme_id,
           created_at,
-          updated_at,
-          course_offerings (
-            id,
-            academic_year_id,
-            teacher_id,
-            section,
-            attainment_scheme_id,
-            created_at,
-            updated_at
-          )
-        `)
-        .order("created_at", { ascending: false });
+          updated_at
+        )
+      `)
+      .order("created_at", { ascending: false });
 
-      if (!error && dbCourses && dbCourses.length > 0) {
-        const dbCourseCodes = new Set(dbCourses.map((c: any) => c.course_code));
-        const formattedDb = await Promise.all(
-          dbCourses.map(async (c: any) => {
-            let offering = Array.isArray(c.course_offerings) ? c.course_offerings[0] : c.course_offerings;
-            if (!offering) {
-              const offId = toValidUuid(`o-${c.id}`, c.id);
-              offering = {
-                id: offId,
-                course_id: c.id,
-                academic_year_id: "a0000000-0000-0000-0000-000000000001",
-                teacher_id: "u0000000-0000-0000-0000-000000000001",
-                section: "A",
-                attainment_scheme_id: "s0000000-0000-0000-0000-000000000001",
-                created_at: c.created_at,
-                updated_at: c.updated_at,
-              };
-            }
-            this.offerings.set(offering.id, offering);
-            const roster = await this.getRoster(offering.id);
-            const schemeName = offering.attainment_scheme_id?.includes("2")
-              ? "Autonomous 30/20 Scheme"
-              : "Autonomous 60/40 Scheme";
+    if (error) {
+      throw new Error(`Database error querying courses: ${error.message}`);
+    }
 
-            return {
-              id: c.id,
-              department_id: c.department_id,
-              course_code: c.course_code,
-              course_name: c.course_name,
-              semester: c.semester,
-              year_of_study: c.year_of_study,
-              created_at: c.created_at,
-              updated_at: c.updated_at,
-              studentsCount: roster.length,
-              cosCount: offering.attainment_scheme_id?.includes("2") ? 4 : 6,
-              schemeName,
-              offering,
-            };
-          })
-        );
-
-        // Include any memory-stored courses created during session
-        for (const mc of this.courses) {
-          if (!dbCourseCodes.has(mc.course_code)) {
-            const roster = await this.getRoster(mc.offering.id);
-            formattedDb.push({
-              ...mc,
-              studentsCount: roster.length,
-            });
+    if (dbCourses && dbCourses.length > 0) {
+      return await Promise.all(
+        dbCourses.map(async (c: any) => {
+          let offering = Array.isArray(c.course_offerings) ? c.course_offerings[0] : c.course_offerings;
+          let studentsCount = 0;
+          if (offering?.id) {
+            const { count } = await db
+              .from("enrollments")
+              .select("*", { count: "exact", head: true })
+              .eq("course_offering_id", offering.id);
+            studentsCount = count || 0;
           }
-        }
 
-        return formattedDb;
-      }
-    } catch {}
+          const schemeName = offering?.attainment_scheme_id?.includes("2") || offering?.attainment_scheme_id?.includes("30")
+            ? "Autonomous 30/20 Scheme"
+            : "Autonomous 60/40 Scheme";
 
-    // Memory store fallback
-    return await Promise.all(
-      this.courses.map(async (c) => {
-        const roster = await this.getRoster(c.offering.id);
-        return {
-          ...c,
-          studentsCount: roster.length,
-        };
-      })
-    );
+          return {
+            id: c.id,
+            department_id: c.department_id,
+            course_code: c.course_code,
+            course_name: c.course_name,
+            semester: c.semester,
+            year_of_study: c.year_of_study,
+            created_at: c.created_at,
+            updated_at: c.updated_at,
+            studentsCount,
+            cosCount: schemeName.includes("30") ? 4 : 6,
+            schemeName,
+            offering,
+          };
+        })
+      );
+    }
+
+    // Default reference course if database has not yet been seeded
+    return [
+      {
+        ...INITIAL_COURSE,
+        studentsCount: 0,
+        cosCount: 6,
+        schemeName: "Autonomous 60/40 Scheme",
+        offering: INITIAL_OFFERING,
+      },
+    ];
   }
 
   /**
-   * Create a new course and guarantee its associated course offering.
+   * Create a new course and guarantee its associated course offering in the database.
    */
   async createCourse(input: {
     course_code: string;
@@ -190,498 +155,615 @@ class OfferingDomainStore {
     year_of_study?: string;
     attainment_scheme_id?: string;
     section?: string;
+    teacher_id?: string;
   }): Promise<any> {
     const courseCode = String(input.course_code).trim().toUpperCase();
     const courseName = String(input.course_name).trim();
-    const courseId = toValidUuid(`c-${Date.now()}`, courseCode);
-    const offeringId = toValidUuid(`o-${Date.now()}`, courseCode);
+
+    if (!courseCode || !courseName) {
+      throw new Error("Course code and course name are required.");
+    }
+
+    const db = await getDbClient();
+
+    // Query active department and academic year
     let deptId = "d0000000-0000-0000-0000-000000000001";
     let ayId = "a0000000-0000-0000-0000-000000000001";
-    const schemeId = input.attainment_scheme_id || "s0000000-0000-0000-0000-000000000001";
-    const schemeName = schemeId.includes("2") ? "Autonomous 30/20 Scheme" : "Autonomous 60/40 Scheme";
 
-    const newCourseObj = {
-      id: courseId,
-      department_id: deptId,
-      course_code: courseCode,
-      course_name: courseName,
-      semester: input.semester || "5th Sem",
-      year_of_study: input.year_of_study || "3rd Yr",
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      studentsCount: 0,
-      cosCount: schemeId.includes("2") ? 4 : 6,
-      schemeName,
-      offering: {
-        id: offeringId,
-        course_id: courseId,
-        academic_year_id: ayId,
-        teacher_id: "u0000000-0000-0000-0000-000000000001",
-        section: input.section || "A",
-        attainment_scheme_id: schemeId,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-    };
+    const { data: depts } = await db.from("departments").select("id").limit(1);
+    if (depts && depts.length > 0) deptId = depts[0].id;
 
-    // Attempt DB insert
-    try {
-      const db = await getDbClient();
-      const { data: depts } = await db.from("departments").select("id").limit(1);
-      if (depts && depts.length > 0) deptId = depts[0].id;
-      const { data: ays } = await db.from("academic_years").select("id").limit(1);
-      if (ays && ays.length > 0) ayId = ays[0].id;
+    const { data: ays } = await db.from("academic_years").select("id").limit(1);
+    if (ays && ays.length > 0) ayId = ays[0].id;
 
-      const { error: cErr } = await db.from("courses").insert({
+    const schemeId = input.attainment_scheme_id && isValidUuid(input.attainment_scheme_id)
+      ? input.attainment_scheme_id
+      : INITIAL_SCHEMES[0].id;
+
+    const courseId = crypto.randomUUID();
+    const offeringId = crypto.randomUUID();
+    const teacherId = input.teacher_id && isValidUuid(input.teacher_id)
+      ? input.teacher_id
+      : INITIAL_OFFERING.teacher_id;
+
+    // 1. Insert course
+    const { data: createdCourse, error: cErr } = await db
+      .from("courses")
+      .insert({
         id: courseId,
         department_id: deptId,
         course_code: courseCode,
         course_name: courseName,
-        semester: newCourseObj.semester,
-        year_of_study: newCourseObj.year_of_study,
-      });
-      if (cErr) console.warn("Supabase course insert notice:", cErr.message);
+        semester: input.semester || "5th Sem",
+        year_of_study: input.year_of_study || "3rd Yr",
+      })
+      .select()
+      .single();
 
-      const { error: oErr } = await db.from("course_offerings").insert({
+    if (cErr) {
+      throw new Error(`Failed to create course in database: ${cErr.message}`);
+    }
+
+    // 2. Insert course offering
+    const { data: createdOffering, error: oErr } = await db
+      .from("course_offerings")
+      .insert({
         id: offeringId,
-        course_id: courseId,
+        course_id: createdCourse.id,
         academic_year_id: ayId,
-        section: newCourseObj.offering.section,
+        teacher_id: teacherId,
+        section: input.section || "A",
         attainment_scheme_id: schemeId,
-      });
-      if (oErr) console.warn("Supabase offering insert notice:", oErr.message);
-    } catch (e: any) {
-      console.warn("Supabase connect notice:", e.message);
+      })
+      .select()
+      .single();
+
+    if (oErr) {
+      throw new Error(`Failed to create course offering in database: ${oErr.message}`);
     }
 
-    this.courses.unshift(newCourseObj);
-    this.offerings.set(offeringId, newCourseObj.offering);
-    this.rosters.set(offeringId, []);
-    this.marks.set(offeringId, []);
+    // 3. Auto-seed standard assessment components for the new offering
+    const componentsToSeed = INITIAL_ASSESSMENTS.map((c) => ({
+      id: crypto.randomUUID(),
+      course_offering_id: offeringId,
+      category: c.category,
+      component_name: c.component_name,
+      max_marks: c.max_marks,
+      sort_order: c.sort_order,
+    }));
 
-    return newCourseObj;
+    await db.from("assessment_components").insert(componentsToSeed);
+
+    return {
+      ...createdCourse,
+      studentsCount: 0,
+      cosCount: schemeId.includes("2") ? 4 : 6,
+      schemeName: schemeId.includes("2") ? "Autonomous 30/20 Scheme" : "Autonomous 60/40 Scheme",
+      offering: createdOffering,
+    };
   }
 
   /**
-   * Get student roster for an offering.
-   * If database has enrolled students, reconciles with database;
-   * otherwise uses the canonical in-memory offering roster.
+   * Get student roster for a course offering directly from PostgreSQL enrollments.
    */
-  async getRoster(rawOfferingId: string): Promise<ReferenceStudent[]> {
-    const offeringId = this.resolveOfferingId(rawOfferingId);
-    const validOfferingUuid = toValidUuid(offeringId);
+  async getRoster(offeringId: string): Promise<ReferenceStudent[]> {
+    if (!isValidUuid(offeringId)) {
+      return [];
+    }
 
-    try {
-      const db = await getDbClient();
-      const { data: enrollments, error } = await db
-        .from("enrollments")
-        .select(`
+    const db = await getDbClient();
+    const { data: enrollments, error } = await db
+      .from("enrollments")
+      .select(`
+        id,
+        roll_no,
+        status,
+        students (
           id,
-          roll_no,
-          status,
-          students (
-            id,
-            student_name,
-            university_reg_no,
-            gender
-          )
-        `)
-        .eq("course_offering_id", validOfferingUuid)
-        .order("roll_no", { ascending: true });
+          student_name,
+          university_reg_no,
+          gender
+        )
+      `)
+      .eq("course_offering_id", offeringId)
+      .order("roll_no", { ascending: true });
 
-      if (!error && enrollments && enrollments.length > 0) {
-        const dbRoster: ReferenceStudent[] = enrollments.map((e: any) => ({
-          id: e.id,
-          roll_no: e.roll_no,
-          student_name: e.students?.student_name || `Student ${e.roll_no}`,
-          status: (e.status as any) || "ENROLLED",
-        }));
-        this.rosters.set(offeringId, dbRoster);
-        return dbRoster;
-      }
-    } catch {
-      // Fallback to memory store
+    if (error) {
+      throw new Error(`Database error fetching roster: ${error.message}`);
     }
 
-    if (!this.rosters.has(offeringId)) {
-      this.rosters.set(offeringId, []);
+    if (!enrollments || enrollments.length === 0) {
+      return [];
     }
 
-    return this.rosters.get(offeringId)!;
+    return enrollments.map((e: any) => ({
+      id: e.id,
+      roll_no: e.roll_no,
+      student_name: e.students?.student_name || `Student ${e.roll_no}`,
+      status: (e.status as any) || "ENROLLED",
+    }));
   }
 
   /**
-   * Add one or more students to an offering roster.
-   * Crucial: IMMEDIATELY creates corresponding entries in the marks store
-   * so the student is instantly visible on Marks Entry.
+   * Add one or more students to an offering roster in PostgreSQL.
+   * Maintains canonical student identity and distinct enrollment UUIDs.
    */
   async addStudentsToRoster(
     offeringId: string,
     studentsToAdd: Array<{ roll_no: string; student_name: string; status?: string }>
   ): Promise<{ added: ReferenceStudent[]; duplicates: string[]; totalCount: number }> {
-    const currentRoster = await this.getRoster(offeringId);
-    const existingRolls = new Set(currentRoster.map((s) => String(s.roll_no).trim()));
+    if (!isValidUuid(offeringId)) {
+      throw new Error(`Invalid course offering ID "${offeringId}": must be a valid UUID.`);
+    }
+
+    const db = await getDbClient();
+
+    // Query offering to find department
+    const { data: offering, error: offErr } = await db
+      .from("course_offerings")
+      .select(`
+        id,
+        courses (
+          department_id
+        )
+      `)
+      .eq("id", offeringId)
+      .single();
+
+    let deptId = "d0000000-0000-0000-0000-000000000001";
+    if (offering) {
+      const c: any = offering.courses;
+      deptId = Array.isArray(c) ? c[0]?.department_id : c?.department_id || deptId;
+    }
+
+    // Query existing enrollments for this offering
+    const { data: existingEnrollments } = await db
+      .from("enrollments")
+      .select("roll_no")
+      .eq("course_offering_id", offeringId);
+
+    const existingRolls = new Set(
+      (existingEnrollments || []).map((e: any) => String(e.roll_no).trim().toLowerCase())
+    );
 
     const duplicates: string[] = [];
     const added: ReferenceStudent[] = [];
-
-    const validOfferingUuid = toValidUuid(offeringId);
-
-    // Prepare DB client
-    let db: any = null;
-    let deptId = "d0000000-0000-0000-0000-000000000001";
-    try {
-      db = await getDbClient();
-      const { data: depts } = await db.from("departments").select("id").limit(1);
-      if (depts && depts.length > 0) deptId = depts[0].id;
-    } catch {}
 
     for (const st of studentsToAdd) {
       const roll = String(st.roll_no).trim();
       const name = String(st.student_name || "").trim();
       if (!roll || !name) continue;
 
-      if (existingRolls.has(roll)) {
+      if (existingRolls.has(roll.toLowerCase())) {
         duplicates.push(roll);
         continue;
       }
 
-      existingRolls.add(roll);
-      const studentUuid = toValidUuid(`s-${roll}`, roll);
-      const enrollmentUuid = toValidUuid(`e-${roll}`, roll);
+      existingRolls.add(roll.toLowerCase());
 
-      // Attempt DB persistence
-      if (db) {
-        try {
-          const { data: newStudent } = await db
-            .from("students")
-            .upsert({
-              id: studentUuid,
-              department_id: deptId,
-              student_name: name,
-              university_reg_no: roll,
-            }, { onConflict: "id" })
-            .select()
-            .single();
+      // 1. Find or create canonical student record
+      let studentId: string;
+      const { data: existingStudent } = await db
+        .from("students")
+        .select("id")
+        .eq("department_id", deptId)
+        .eq("university_reg_no", roll)
+        .maybeSingle();
 
-          if (newStudent?.id) {
-            await db
-              .from("enrollments")
-              .upsert({
-                id: enrollmentUuid,
-                course_offering_id: validOfferingUuid,
-                student_id: newStudent.id,
-                roll_no: roll,
-                status: st.status || "ENROLLED",
-              }, { onConflict: "id" });
-          }
-        } catch {
-          // Graceful fallback to domain store
+      if (existingStudent?.id) {
+        studentId = existingStudent.id;
+      } else {
+        const newStudentId = crypto.randomUUID();
+        const { data: insertedStudent, error: sErr } = await db
+          .from("students")
+          .insert({
+            id: newStudentId,
+            department_id: deptId,
+            student_name: name,
+            university_reg_no: roll,
+          })
+          .select("id")
+          .single();
+
+        if (sErr || !insertedStudent) {
+          throw new Error(`Failed to create student record for Roll ${roll}: ${sErr?.message}`);
         }
+        studentId = insertedStudent.id;
       }
 
-      const newStudentObj: ReferenceStudent = {
-        id: enrollmentUuid,
-        roll_no: roll,
+      // 2. Create unique enrollment for this offering
+      const enrollmentId = crypto.randomUUID();
+      const { data: insertedEnrollment, error: eErr } = await db
+        .from("enrollments")
+        .insert({
+          id: enrollmentId,
+          course_offering_id: offeringId,
+          student_id: studentId,
+          roll_no: roll,
+          status: st.status || "ENROLLED",
+        })
+        .select("id, roll_no, status")
+        .single();
+
+      if (eErr || !insertedEnrollment) {
+        throw new Error(`Failed to enroll student Roll ${roll} in offering: ${eErr?.message}`);
+      }
+
+      added.push({
+        id: insertedEnrollment.id,
+        roll_no: insertedEnrollment.roll_no,
         student_name: name,
-        status: (st.status as any) || "ENROLLED",
-      };
-
-      added.push(newStudentObj);
+        status: (insertedEnrollment.status as any) || "ENROLLED",
+      });
     }
 
-    // Update roster
-    const updatedRoster = [...currentRoster, ...added];
-    this.rosters.set(offeringId, updatedRoster);
-
-    // CRITICAL: Synchronize marks store immediately!
-    const currentMarks = this.marks.get(offeringId) || [];
-    const existingMarksRolls = new Set(currentMarks.map((m) => String(m.roll_no).trim()));
-
-    for (const addedStudent of added) {
-      if (!existingMarksRolls.has(addedStudent.roll_no)) {
-        currentMarks.push({
-          student_id: addedStudent.id,
-          roll_no: addedStudent.roll_no,
-          student_name: addedStudent.student_name,
-          marks: {}, // Empty marks ready for faculty entry
-        });
-        existingMarksRolls.add(addedStudent.roll_no);
-      }
-    }
-    this.marks.set(offeringId, currentMarks);
+    const { count: totalCount } = await db
+      .from("enrollments")
+      .select("*", { count: "exact", head: true })
+      .eq("course_offering_id", offeringId);
 
     return {
       added,
       duplicates,
-      totalCount: updatedRoster.length,
+      totalCount: totalCount || 0,
     };
+  }
+
+  /**
+   * Delete a student enrollment from a course offering.
+   */
+  async deleteStudent(offeringId: string, studentIdOrRoll: string): Promise<boolean> {
+    if (!isValidUuid(offeringId)) {
+      throw new Error("Invalid course offering ID.");
+    }
+
+    const db = await getDbClient();
+
+    // Delete enrollment
+    let query = db.from("enrollments").delete().eq("course_offering_id", offeringId);
+    if (isValidUuid(studentIdOrRoll)) {
+      query = query.eq("id", studentIdOrRoll);
+    } else {
+      query = query.eq("roll_no", studentIdOrRoll);
+    }
+
+    const { error } = await query;
+    if (error) {
+      throw new Error(`Failed to remove student from offering: ${error.message}`);
+    }
+
+    return true;
+  }
+
+  /**
+   * Clear all student enrollments from a course offering.
+   */
+  async clearRoster(offeringId: string): Promise<boolean> {
+    if (!isValidUuid(offeringId)) {
+      throw new Error("Invalid course offering ID.");
+    }
+
+    const db = await getDbClient();
+    const { error } = await db
+      .from("enrollments")
+      .delete()
+      .eq("course_offering_id", offeringId);
+
+    if (error) {
+      throw new Error(`Failed to clear offering roster: ${error.message}`);
+    }
+
+    return true;
   }
 
   /**
    * Get marks records for an offering.
-   * GUARANTEE: Marks are DRIVEN by the current roster.
-   * Every student in the roster appears in the marks records.
+   * Queries database enrollments, assessment components, and persisted marks.
    */
-  async getMarks(offeringId: string): Promise<{ marks: StudentMarksRecord[]; count: number }> {
-    const roster = await this.getRoster(offeringId);
-    let marksList: StudentMarksRecord[] = this.marks.get(offeringId) || [];
-
-    if (!this.marks.has(offeringId)) {
-      marksList = [];
-      this.marks.set(offeringId, marksList);
+  async getMarks(offeringId: string): Promise<{ marks: StudentMarksRecord[]; count: number; components: any[] }> {
+    if (!isValidUuid(offeringId)) {
+      return { marks: [], count: 0, components: INITIAL_ASSESSMENTS };
     }
 
-    // Attempt to load saved marks from Supabase
-    const validOfferingUuid = toValidUuid(offeringId);
-    try {
-      const db = await getDbClient();
-      const { data: dbComps } = await db
-        .from("assessment_components")
-        .select("id, component_name")
-        .eq("course_offering_id", validOfferingUuid);
+    const db = await getDbClient();
 
-      const { data: dbMarks, error } = await db
-        .from("student_marks")
-        .select(`
+    // 1. Fetch roster enrollments
+    const { data: enrollments, error: rErr } = await db
+      .from("enrollments")
+      .select(`
+        id,
+        roll_no,
+        students (
           id,
-          marks_obtained,
-          status,
-          assessment_component_id,
-          enrollments!inner (
-            id,
-            roll_no,
-            course_offering_id,
-            students (
-              student_name
-            )
-          )
-        `)
-        .eq("enrollments.course_offering_id", validOfferingUuid);
+          student_name
+        )
+      `)
+      .eq("course_offering_id", offeringId)
+      .order("roll_no", { ascending: true });
 
-      if (!error && dbMarks && dbMarks.length > 0 && dbComps) {
-        const compMap = new Map(dbComps.map((c: any) => [c.id, c.component_name]));
-        const markByRoll = new Map<string, Record<string, any>>();
-
-        for (const row of dbMarks as any[]) {
-          const roll = String(row.enrollments?.roll_no);
-          const compName = compMap.get(row.assessment_component_id) || row.assessment_component_id;
-          if (!markByRoll.has(roll)) markByRoll.set(roll, {});
-          const val = row.status === "ABSENT" ? "AB" : row.marks_obtained;
-          markByRoll.get(roll)![compName] = val;
-        }
-
-        // Merge DB marks into memory marksList
-        for (const rec of marksList) {
-          const dbScores = markByRoll.get(rec.roll_no);
-          if (dbScores) {
-            rec.marks = { ...rec.marks, ...dbScores };
-          }
-        }
-      }
-    } catch {
-      // Memory fallback
+    if (rErr) {
+      throw new Error(`Database error fetching roster for marks: ${rErr.message}`);
     }
 
-    // RECONCILE: Ensure EVERY student in roster is present in marks
-    const marksByRoll = new Map(marksList.map((m) => [String(m.roll_no).trim(), m]));
-    const reconciledMarks: StudentMarksRecord[] = [];
+    // 2. Fetch assessment components
+    const { data: dbComps, error: cErr } = await db
+      .from("assessment_components")
+      .select("id, component_name, max_marks, category, sort_order")
+      .eq("course_offering_id", offeringId)
+      .order("sort_order", { ascending: true });
 
-    for (const student of roster) {
-      const roll = String(student.roll_no).trim();
-      const existing = marksByRoll.get(roll);
-      if (existing) {
-        // Ensure student name is up to date with roster
-        existing.student_name = student.student_name;
-        reconciledMarks.push(existing);
+    if (cErr) {
+      throw new Error(`Database error fetching assessment components: ${cErr.message}`);
+    }
+
+    const components = dbComps && dbComps.length > 0 ? dbComps : INITIAL_ASSESSMENTS;
+
+    if (!enrollments || enrollments.length === 0) {
+      return { marks: [], count: 0, components };
+    }
+
+    // Build map of component_id -> normalizedKey
+    const compKeyMap = new Map<string, string>();
+    for (const comp of components) {
+      compKeyMap.set(comp.id, normalizeComponentKey(comp.component_name));
+    }
+
+    // 3. Fetch persisted student marks
+    const enrollmentIds = enrollments.map((e: any) => e.id);
+    const { data: dbMarks, error: mErr } = await db
+      .from("student_marks")
+      .select("enrollment_id, assessment_component_id, marks_obtained, status")
+      .in("enrollment_id", enrollmentIds);
+
+    if (mErr) {
+      throw new Error(`Database error fetching student marks: ${mErr.message}`);
+    }
+
+    // Index marks by enrollment_id -> compKey -> value
+    const marksByEnrollment = new Map<string, Record<string, any>>();
+    for (const m of dbMarks || []) {
+      if (!marksByEnrollment.has(m.enrollment_id)) {
+        marksByEnrollment.set(m.enrollment_id, {});
+      }
+      const stMarks = marksByEnrollment.get(m.enrollment_id)!;
+      const key = compKeyMap.get(m.assessment_component_id) || m.assessment_component_id;
+
+      if (m.status === "ABSENT") {
+        stMarks[key] = "A";
+      } else if (m.status === "EXEMPT") {
+        stMarks[key] = "E";
+      } else if (m.marks_obtained !== null && m.marks_obtained !== undefined) {
+        stMarks[key] = Number(m.marks_obtained);
       } else {
-        // Newly added student from roster without marks yet
-        const newRecord: StudentMarksRecord = {
-          student_id: student.id,
-          roll_no: student.roll_no,
-          student_name: student.student_name,
-          marks: {},
-        };
-        reconciledMarks.push(newRecord);
-        marksByRoll.set(roll, newRecord);
+        stMarks[key] = null;
       }
     }
 
-    this.marks.set(offeringId, reconciledMarks);
+    // Build full gradebook for all enrolled students
+    const marksList: StudentMarksRecord[] = enrollments.map((e: any) => {
+      const persisted = marksByEnrollment.get(e.id) || {};
+      return {
+        student_id: e.students?.id || e.id,
+        enrollment_id: e.id,
+        roll_no: e.roll_no,
+        student_name: e.students?.student_name || `Student ${e.roll_no}`,
+        marks: persisted,
+      };
+    });
 
     return {
-      marks: reconciledMarks,
-      count: reconciledMarks.length,
+      marks: marksList,
+      count: marksList.length,
+      components,
     };
   }
 
   /**
-   * Save marks for an offering.
+   * Persists updated student marks into Supabase PostgreSQL.
+   * Performs validation, transactional upsert, and returns actual record counts.
    */
   async saveMarks(
     offeringId: string,
     updatedMarks: StudentMarksRecord[]
-  ): Promise<{ savedCount: number; warnings: any[]; timestamp: string }> {
-    const maxMarksMap: Record<string, number> = {
-      mt1_co1: 10, mt1_co2: 10, mt1_co3: 10,
-      mt2_co4: 10, mt2_co5: 10, mt2_co6: 10,
-      ese_co1: 10, ese_co2: 12, ese_co3: 12,
-      ese_co4: 10, ese_co5: 8, ese_co6: 8,
-      ta: 10,
-    };
+  ): Promise<{ savedCount: number; warnings: string[]; timestamp: string }> {
+    if (!isValidUuid(offeringId)) {
+      throw new Error(`Invalid offering ID "${offeringId}": must be a valid UUID.`);
+    }
 
-    const warnings: Array<{ roll_no: string; component: string; value: number; max: number }> = [];
+    if (!Array.isArray(updatedMarks)) {
+      throw new Error("Invalid payload: updatedMarks must be an array.");
+    }
+
+    const db = await getDbClient();
+
+    // 1. Fetch enrollments for this offering
+    const { data: enrollments, error: rErr } = await db
+      .from("enrollments")
+      .select("id, roll_no")
+      .eq("course_offering_id", offeringId);
+
+    if (rErr) throw new Error(`Database error fetching enrollments: ${rErr.message}`);
+
+    const enrollmentByRoll = new Map<string, string>();
+    const enrollmentById = new Map<string, string>();
+    for (const e of enrollments || []) {
+      enrollmentByRoll.set(String(e.roll_no).trim().toLowerCase(), e.id);
+      enrollmentById.set(e.id, e.id);
+    }
+
+    // 2. Fetch assessment components
+    const { data: dbComps, error: cErr } = await db
+      .from("assessment_components")
+      .select("id, component_name, max_marks")
+      .eq("course_offering_id", offeringId);
+
+    if (cErr) throw new Error(`Database error fetching components: ${cErr.message}`);
+
+    // Map normalized key and component_name to component ID and max_marks
+    const compMap = new Map<string, { id: string; max_marks: number; name: string }>();
+    for (const comp of dbComps || []) {
+      const normKey = normalizeComponentKey(comp.component_name);
+      compMap.set(normKey, { id: comp.id, max_marks: Number(comp.max_marks), name: comp.component_name });
+      compMap.set(comp.id, { id: comp.id, max_marks: Number(comp.max_marks), name: comp.component_name });
+    }
+
+    const rowsToUpsert: Array<{
+      enrollment_id: string;
+      assessment_component_id: string;
+      marks_obtained: number | null;
+      status: string;
+      updated_at: string;
+    }> = [];
+
+    const warnings: string[] = [];
 
     for (const record of updatedMarks) {
-      if (record.marks && typeof record.marks === "object") {
-        for (const [comp, val] of Object.entries(record.marks)) {
-          if (typeof val === "number") {
-            const max = maxMarksMap[comp] ?? 10;
-            if (val > max) {
-              warnings.push({
-                roll_no: record.roll_no,
-                component: comp,
-                value: val,
-                max,
-              });
+      const rollKey = String(record.roll_no || "").trim().toLowerCase();
+      const enrollmentId =
+        (record.enrollment_id && enrollmentById.get(record.enrollment_id)) ||
+        enrollmentByRoll.get(rollKey);
+
+      if (!enrollmentId) {
+        warnings.push(`Student with Roll ${record.roll_no} not found in this offering's roster.`);
+        continue;
+      }
+
+      const marks = record.marks || {};
+      for (const [key, rawVal] of Object.entries(marks)) {
+        const comp = compMap.get(key) || compMap.get(normalizeComponentKey(key));
+        if (!comp) {
+          warnings.push(`Unknown assessment component "${key}" skipped.`);
+          continue;
+        }
+
+        let status = "PRESENT";
+        let marksObtained: number | null = null;
+
+        if (rawVal === null || rawVal === undefined || String(rawVal).trim() === "") {
+          status = "NOT_ENTERED";
+          marksObtained = null;
+        } else {
+          const strVal = String(rawVal).trim().toUpperCase();
+          if (strVal === "A" || strVal === "AB" || strVal === "ABSENT") {
+            status = "ABSENT";
+            marksObtained = null;
+          } else if (strVal === "E" || strVal === "EX" || strVal === "EXEMPT") {
+            status = "EXEMPT";
+            marksObtained = null;
+          } else {
+            const num = parseFloat(strVal);
+            if (isNaN(num)) {
+              warnings.push(`Non-numeric mark "${rawVal}" for Roll ${record.roll_no} on ${comp.name}.`);
+              continue;
             }
+            if (num < 0) {
+              warnings.push(`Negative mark ${num} for Roll ${record.roll_no} on ${comp.name} rejected.`);
+              continue;
+            }
+            if (num > comp.max_marks) {
+              warnings.push(`Mark ${num} exceeds maximum of ${comp.max_marks} for Roll ${record.roll_no} on ${comp.name}.`);
+            }
+            marksObtained = num;
+            status = "PRESENT";
           }
         }
+
+        rowsToUpsert.push({
+          enrollment_id: enrollmentId,
+          assessment_component_id: comp.id,
+          marks_obtained: marksObtained,
+          status,
+          updated_at: new Date().toISOString(),
+        });
       }
     }
 
-    // Save in canonical memory store
-    this.marks.set(offeringId, updatedMarks);
+    if (rowsToUpsert.length > 0) {
+      // Chunk upserts in batches of 200 for PostgreSQL performance
+      const chunkSize = 200;
+      for (let i = 0; i < rowsToUpsert.length; i += chunkSize) {
+        const chunk = rowsToUpsert.slice(i, i + chunkSize);
+        const { error: upErr } = await db
+          .from("student_marks")
+          .upsert(chunk, { onConflict: "enrollment_id,assessment_component_id" });
 
-    // Persist to Supabase
-    const validOfferingUuid = toValidUuid(offeringId);
-    try {
-      const db = await getDbClient();
-      const { data: enrollments } = await db
-        .from("enrollments")
-        .select("id, roll_no")
-        .eq("course_offering_id", validOfferingUuid);
-
-      const { data: components } = await db
-        .from("assessment_components")
-        .select("id, component_name")
-        .eq("course_offering_id", validOfferingUuid);
-
-      if (enrollments && components && enrollments.length > 0 && components.length > 0) {
-        const enrollMap = new Map(enrollments.map((e: any) => [e.roll_no, e.id]));
-        const compMap = new Map(components.map((c: any) => [c.component_name, c.id]));
-
-        const marksToUpsert: Array<{
-          enrollment_id: string;
-          assessment_component_id: string;
-          marks_obtained: number | null;
-          status: string;
-        }> = [];
-
-        for (const record of updatedMarks) {
-          const enrollId = enrollMap.get(record.roll_no);
-          if (!enrollId) continue;
-
-          for (const [compName, val] of Object.entries(record.marks || {})) {
-            const compId = compMap.get(compName);
-            if (!compId) continue;
-
-            const isAbsent = val === "AB" || val === "A";
-            const numVal = typeof val === "number" ? val : null;
-
-            marksToUpsert.push({
-              enrollment_id: enrollId,
-              assessment_component_id: compId,
-              marks_obtained: isAbsent ? null : numVal,
-              status: isAbsent ? "ABSENT" : "PRESENT",
-            });
-          }
-        }
-
-        if (marksToUpsert.length > 0) {
-          await db
-            .from("student_marks")
-            .upsert(marksToUpsert, { onConflict: "enrollment_id,assessment_component_id" });
+        if (upErr) {
+          throw new Error(`Failed to persist marks in database: ${upErr.message}`);
         }
       }
-
-      // Record audit log
-      try {
-        await db.from("audit_logs").insert({
-          action: "UPDATE_MARKS",
-          entity: "student_marks",
-          entity_id: validOfferingUuid,
-          payload: {
-            offeringId,
-            recordsCount: updatedMarks.length,
-            warningsCount: warnings.length,
-          },
-        });
-      } catch {}
-    } catch {
-      // Memory fallback
     }
 
     return {
-      savedCount: updatedMarks.length,
+      savedCount: rowsToUpsert.length,
       warnings,
       timestamp: new Date().toISOString(),
     };
   }
-
-  /**
-   * Clear all students and marks for an offering.
-   */
-  async clearRoster(offeringId: string): Promise<boolean> {
-    const resolvedId = this.resolveOfferingId(offeringId);
-    this.rosters.set(resolvedId, []);
-    this.marks.set(resolvedId, []);
-
-    try {
-      const db = await getDbClient();
-      const validOfferingUuid = toValidUuid(resolvedId);
-      await db
-        .from("enrollments")
-        .delete()
-        .eq("course_offering_id", validOfferingUuid);
-    } catch {}
-
-    return true;
-  }
-
-  /**
-   * Delete student from roster and marks
-   */
-  async deleteStudent(offeringId: string, rollNoOrId: string): Promise<boolean> {
-    const resolvedId = this.resolveOfferingId(offeringId);
-    const roster = await this.getRoster(resolvedId);
-    const filteredRoster = roster.filter(
-      (s) => String(s.roll_no).trim() !== String(rollNoOrId).trim() && s.id !== rollNoOrId
-    );
-    this.rosters.set(resolvedId, filteredRoster);
-
-    const marks = this.marks.get(resolvedId) || [];
-    const filteredMarks = marks.filter(
-      (m) => String(m.roll_no).trim() !== String(rollNoOrId).trim() && m.student_id !== rollNoOrId
-    );
-    this.marks.set(resolvedId, filteredMarks);
-
-    // Delete in DB if reachable
-    try {
-      const db = await getDbClient();
-      const validOfferingUuid = toValidUuid(resolvedId);
-      await db
-        .from("enrollments")
-        .delete()
-        .eq("course_offering_id", validOfferingUuid)
-        .or(`roll_no.eq.${rollNoOrId},id.eq.${rollNoOrId}`);
-    } catch {}
-
-    return true;
-  }
 }
 
-// Global singleton instance across Next.js API routes in the same Node.js process
-const globalForOffering = global as unknown as { __offeringDomainStore?: OfferingDomainStore };
-export const offeringStore = globalForOffering.__offeringDomainStore || new OfferingDomainStore();
-if (process.env.NODE_ENV !== "production") globalForOffering.__offeringDomainStore = offeringStore;
+export const offeringStore = new OfferingDomainService();
+export const toValidUuid = (id: string) => id; // Backwards-compatibility alias for tests
+
+/**
+ * Authoritative attainment calculation service for a course offering.
+ */
+export async function calculateOfferingAttainment(offeringId: string) {
+  const db = await getDbClient();
+  const marksData = await offeringStore.getMarks(offeringId);
+  if (!marksData || marksData.marks.length === 0) {
+    return null;
+  }
+
+  // Load components
+  const { data: dbComps } = await db
+    .from("assessment_components")
+    .select(`
+      id,
+      component_name,
+      component_type,
+      max_marks,
+      course_outcome_id,
+      course_outcomes (
+        co_code
+      )
+    `)
+    .eq("course_offering_id", offeringId);
+
+  const { AttainmentEngine } = await import("@/lib/engine/attainmentEngine");
+  const { INITIAL_COS, INITIAL_POS, INITIAL_MAPPINGS, INITIAL_SCHEMES } = await import("@/lib/data/initialData");
+
+  const components = (dbComps && dbComps.length > 0)
+    ? dbComps.map((c: any) => ({
+        id: c.id,
+        name: c.component_name,
+        type: c.component_type || "IAM",
+        max_marks: Number(c.max_marks),
+        co_code: c.course_outcomes?.co_code || "CO1",
+      }))
+    : [
+        { id: "comp-mt1-co1", name: "MT1 Q1 (CO1)", type: "IAM", max_marks: 10, co_code: "CO1" },
+        { id: "comp-mt1-co2", name: "MT1 Q2 (CO2)", type: "IAM", max_marks: 10, co_code: "CO2" },
+        { id: "comp-mt1-co3", name: "MT1 Q3 (CO3)", type: "IAM", max_marks: 10, co_code: "CO3" },
+        { id: "comp-mt2-co4", name: "MT2 Q1 (CO4)", type: "IAM", max_marks: 10, co_code: "CO4" },
+        { id: "comp-mt2-co5", name: "MT2 Q2 (CO5)", type: "IAM", max_marks: 10, co_code: "CO5" },
+        { id: "comp-mt2-co6", name: "MT2 Q3 (CO6)", type: "IAM", max_marks: 10, co_code: "CO6" },
+        { id: "comp-ese-co1", name: "ESE (CO1)", type: "ESE", max_marks: 8, co_code: "CO1" },
+        { id: "comp-ese-co2", name: "ESE (CO2)", type: "ESE", max_marks: 8, co_code: "CO2" },
+        { id: "comp-ese-co3", name: "ESE (CO3)", type: "ESE", max_marks: 8, co_code: "CO3" },
+        { id: "comp-ese-co4", name: "ESE (CO4)", type: "ESE", max_marks: 16, co_code: "CO4" },
+        { id: "comp-ese-co5", name: "ESE (CO5)", type: "ESE", max_marks: 8, co_code: "CO5" },
+        { id: "comp-ese-co6", name: "ESE (CO6)", type: "ESE", max_marks: 12, co_code: "CO6" },
+      ];
+
+  const engine = new AttainmentEngine(INITIAL_SCHEMES[0]);
+  const coCodes = INITIAL_COS.map((c) => c.co_code);
+  const poList = INITIAL_POS.map((p) => ({ po_code: p.po_code, po_type: p.po_type as "PO" | "PSO" }));
+
+  return engine.calculate(
+    marksData.marks,
+    components as any,
+    coCodes,
+    poList,
+    INITIAL_MAPPINGS
+  );
+}

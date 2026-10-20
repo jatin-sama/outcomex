@@ -1,19 +1,43 @@
 import { NextRequest, NextResponse } from "next/server";
-import { offeringStore } from "@/lib/domain/offeringStore";
-import { INITIAL_ASSESSMENTS } from "@/lib/data/initialData";
+import { offeringStore, isValidUuid } from "@/lib/domain/offeringStore";
+import { getAuthenticatedUser, authorizeOfferingAccess } from "@/lib/auth/authHelper";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+
+  if (!isValidUuid(id)) {
+    return NextResponse.json(
+      { error: `Invalid offering ID "${id}": must be a valid UUID.` },
+      { status: 400 }
+    );
+  }
+
   try {
-    const { marks, count } = await offeringStore.getMarks(id);
+    const authCtx = await getAuthenticatedUser(request);
+    if (!authCtx) {
+      return NextResponse.json(
+        { error: "Authentication required to view student marks." },
+        { status: 401 }
+      );
+    }
+
+    const authCheck = await authorizeOfferingAccess(authCtx, id);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { error: authCheck.reason || "Unauthorized to access marks for this offering." },
+        { status: 403 }
+      );
+    }
+
+    const { marks, count, components } = await offeringStore.getMarks(id);
 
     return NextResponse.json({
       offering_id: id,
       count,
-      components: INITIAL_ASSESSMENTS,
+      components,
       marks,
     });
   } catch (err: any) {
@@ -29,7 +53,31 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+
+  if (!isValidUuid(id)) {
+    return NextResponse.json(
+      { error: `Invalid offering ID "${id}": must be a valid UUID.` },
+      { status: 400 }
+    );
+  }
+
   try {
+    const authCtx = await getAuthenticatedUser(request);
+    if (!authCtx) {
+      return NextResponse.json(
+        { error: "Authentication required to update marks." },
+        { status: 401 }
+      );
+    }
+
+    const authCheck = await authorizeOfferingAccess(authCtx, id);
+    if (!authCheck.authorized) {
+      return NextResponse.json(
+        { error: authCheck.reason || "Unauthorized to update marks for this offering." },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
     const { updatedMarks } = body;
 

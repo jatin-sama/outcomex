@@ -20,6 +20,7 @@ import {
   Clock,
 } from "lucide-react";
 import { AuditLogEntry } from "@/lib/audit/auditLogger";
+import { INITIAL_OFFERING } from "@/lib/data/initialData";
 
 const FALLBACK_LOGS: AuditLogEntry[] = [];
 
@@ -30,7 +31,7 @@ export default function HistoryPage() {
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
 
   useEffect(() => {
-    let activeId = "o0000000-0000-0000-0000-000000000001";
+    let activeId = INITIAL_OFFERING.id;
     if (typeof window !== "undefined") {
       activeId =
         new URLSearchParams(window.location.search).get("offeringId") ||

@@ -101,30 +101,34 @@ export default function MappingsPage() {
 
   const handleSave = async () => {
     try {
-      await fetch(`/api/v1/offerings/${offeringId}/mappings`, {
+      const res = await fetch(`/api/v1/offerings/${offeringId}/mappings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mappings }),
       });
-    } catch {}
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save mappings");
 
-    setSaveSuccess(true);
+      setSaveSuccess(true);
 
-    // Log audit event via API
-    fetch("/api/v1/offerings/o0000000-0000-0000-0000-000000000001/audit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "COURSE_CREATED",
-        resource_type: "co_po_matrix",
-        payload: {
-          updated_mappings: mappings,
-          calculated_averages: poAverages,
-        },
-      }),
-    }).catch(() => {});
+      // Log audit event via API
+      fetch(`/api/v1/offerings/${offeringId}/audit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "MAPPINGS_UPDATED",
+          resource_type: "co_po_matrix",
+          payload: {
+            updated_mappings: mappings,
+            calculated_averages: poAverages,
+          },
+        }),
+      }).catch(() => {});
 
-    setTimeout(() => setSaveSuccess(false), 3000);
+      setTimeout(() => setSaveSuccess(false), 3000);
+    } catch (err: any) {
+      alert(`Save failed: ${err.message}`);
+    }
   };
 
   return (

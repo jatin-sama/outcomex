@@ -219,22 +219,60 @@ export default function MarksPage() {
       record.student_name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // File Upload Handler (Parses CSV or Excel preview)
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // File Upload Handler (Parses CSV or Excel binary workbook using ExcelJS)
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setFileName(file.name);
-    const reader = new FileReader();
 
-    reader.onload = (event) => {
-      const text = event.target?.result as string;
-      const lines = text.split(/\r\n|\n|\r/).filter((l) => l.trim().length > 0);
-      const rows = lines.map((line) => line.split(/[\t,]/).map((c) => c.trim().replace(/^"|"$/g, "")));
+    try {
+      let rows: string[][] = [];
+
+      if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
+        // Parse actual Excel file format correctly using ExcelJS
+        const buffer = await file.arrayBuffer();
+        const ExcelJS = (await import("exceljs")).default;
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(buffer);
+
+        // Pick first worksheet by default
+        const worksheet = workbook.worksheets[0];
+        if (!worksheet) throw new Error("No worksheets found in uploaded Excel file.");
+
+        worksheet.eachRow({ includeEmpty: false }, (row) => {
+          const rowVals: string[] = [];
+          const values = Array.isArray(row.values) ? row.values.slice(1) : [];
+          for (const val of values) {
+            if (val === null || val === undefined) {
+              rowVals.push("");
+            } else if (typeof val === "object" && val !== null && "result" in (val as any)) {
+              rowVals.push(String((val as any).result ?? "").trim());
+            } else {
+              rowVals.push(String(val).trim());
+            }
+          }
+          if (rowVals.some((c) => c !== "")) {
+            rows.push(rowVals);
+          }
+        });
+      } else {
+        // Parse CSV or TSV
+        const text = await file.text();
+        const lines = text.split(/\r\n|\n|\r/).filter((l) => l.trim().length > 0);
+        rows = lines.map((line) =>
+          line.split(/[\t,]/).map((c) => c.trim().replace(/^"|"$/g, ""))
+        );
+      }
+
+      if (rows.length < 2) {
+        alert("The uploaded file does not contain enough data rows (header + student marks).");
+        return;
+      }
 
       setFileContent(rows);
 
-      // Auto-detect column mapping
+      // Auto-detect column mapping from header row
       const headers = rows[0] || [];
       const mapping: Record<string, number> = {};
 
@@ -263,9 +301,9 @@ export default function MarksPage() {
 
       setColumnMapping(mapping);
       setImportStep(2);
-    };
-
-    reader.readAsText(file);
+    } catch (err: any) {
+      alert(`Failed to parse file: ${err.message}`);
+    }
   };
 
   // Run validation
@@ -279,9 +317,11 @@ export default function MarksPage() {
         body: JSON.stringify({
           rows: rowsToValidate,
           columnMapping,
+          commit: false,
         }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Validation request failed");
       setValidationReport(data);
       setImportStep(3);
     } catch (err: any) {
@@ -291,26 +331,35 @@ export default function MarksPage() {
     }
   };
 
-  // Confirm import
-  const handleConfirmImport = () => {
-    if (!validationReport || !validationReport.preview_data) return;
+  // Confirm import — commits FULL cohort dataset transactionally to database
+  const handleConfirmImport = async () => {
+    if (!validationReport || validationReport.has_critical_errors) return;
 
-    const importedRecords: StudentMarksRecord[] = validationReport.preview_data.map(
-      (p: any, idx: number) => ({
-        student_id: `s-imp-${idx}`,
-        roll_no: p.roll_no,
-        student_name: p.student_name,
-        marks: p.marks,
-      })
-    );
-
-    setMarksData(importedRecords);
+    setIsSaving(true);
     try {
-      localStorage.setItem("outcomeX_marks", JSON.stringify(importedRecords));
-    } catch {}
-    setMode("editor");
-    setHasUnsavedChanges(true);
-    setSaveStatus(`Imported ${importedRecords.length} records. Review and click Save.`);
+      const rowsToCommit = fileContent.slice(1);
+      const res = await fetch(`/api/v1/offerings/${offeringId}/marks/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rows: rowsToCommit,
+          columnMapping,
+          commit: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to commit imported marks to database");
+
+      // Reload fresh persisted marks from database
+      await loadMarks(offeringId);
+      setMode("editor");
+      setHasUnsavedChanges(false);
+      setSaveStatus(`Successfully persisted marks for ${data.valid_rows_count} students to database.`);
+    } catch (err: any) {
+      alert(`Import commit failed: ${err.message}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
