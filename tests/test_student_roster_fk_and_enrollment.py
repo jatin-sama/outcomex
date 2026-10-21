@@ -361,6 +361,13 @@ class TestMigration07Verification(unittest.TestCase):
         self.assertTrue("students_manage" in self.m7_sql)
         self.assertIn("public.get_user_department_ids()", self.m7_sql)
 
+    def test_migration_07_seeds_assessment_components_with_not_null_category(self):
+        """Ensures category column is populated to satisfy NOT NULL and check constraints"""
+        self.assertIn("category, component_name", self.m7_sql)
+        self.assertIn("'MID_TERM_1'", self.m7_sql)
+        self.assertIn("'END_SEM'", self.m7_sql)
+        self.assertIn("'TEACHER_ASSESSMENT'", self.m7_sql)
+
 
 if __name__ == "__main__":
     unittest.main()

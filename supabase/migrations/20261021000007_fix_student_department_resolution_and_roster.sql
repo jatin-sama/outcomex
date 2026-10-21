@@ -113,21 +113,21 @@ BEGIN
     END IF;
 
     -- 7. Ensure standard assessment components exist for this offering
-    INSERT INTO public.assessment_components (course_offering_id, component_name, max_marks, sort_order)
+    INSERT INTO public.assessment_components (course_offering_id, category, component_name, max_marks, sort_order)
     VALUES
-        (v_offering_id, 'MT1 Q1 (CO1)', 10, 1),
-        (v_offering_id, 'MT1 Q2 (CO2)', 10, 2),
-        (v_offering_id, 'MT1 Q3 (CO3)', 10, 3),
-        (v_offering_id, 'MT2 Q1 (CO4)', 10, 4),
-        (v_offering_id, 'MT2 Q2 (CO5)', 10, 5),
-        (v_offering_id, 'MT2 Q3 (CO6)', 10, 6),
-        (v_offering_id, 'ESE (CO1)', 8, 7),
-        (v_offering_id, 'ESE (CO2)', 8, 8),
-        (v_offering_id, 'ESE (CO3)', 8, 9),
-        (v_offering_id, 'ESE (CO4)', 16, 10),
-        (v_offering_id, 'ESE (CO5)', 8, 11),
-        (v_offering_id, 'ESE (CO6)', 12, 12),
-        (v_offering_id, 'Teacher Assessment (CO5)', 10, 13)
+        (v_offering_id, 'MID_TERM_1', 'MT1 Q1 (CO1)', 10, 1),
+        (v_offering_id, 'MID_TERM_1', 'MT1 Q2 (CO2)', 10, 2),
+        (v_offering_id, 'MID_TERM_1', 'MT1 Q3 (CO3)', 10, 3),
+        (v_offering_id, 'MID_TERM_2', 'MT2 Q1 (CO4)', 10, 4),
+        (v_offering_id, 'MID_TERM_2', 'MT2 Q2 (CO5)', 10, 5),
+        (v_offering_id, 'MID_TERM_2', 'MT2 Q3 (CO6)', 10, 6),
+        (v_offering_id, 'END_SEM', 'ESE (CO1)', 8, 7),
+        (v_offering_id, 'END_SEM', 'ESE (CO2)', 8, 8),
+        (v_offering_id, 'END_SEM', 'ESE (CO3)', 8, 9),
+        (v_offering_id, 'END_SEM', 'ESE (CO4)', 16, 10),
+        (v_offering_id, 'END_SEM', 'ESE (CO5)', 8, 11),
+        (v_offering_id, 'END_SEM', 'ESE (CO6)', 12, 12),
+        (v_offering_id, 'TEACHER_ASSESSMENT', 'Teacher Assessment (CO5)', 10, 13)
     ON CONFLICT DO NOTHING;
 
 END $$;
