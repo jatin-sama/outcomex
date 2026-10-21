@@ -41,8 +41,8 @@ export default function AttainmentPage() {
           const stored = typeof window !== "undefined" ? localStorage.getItem("outcomeX_active_offering_id") : null;
           const param = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("offeringId") : null;
           const activeId = param || stored;
-          const exists = activeId && courseData.courses.some((c: any) => (c.offering?.id || c.id) === activeId);
-          const targetId = exists ? activeId : (courseData.courses[0].offering?.id || courseData.courses[0].id);
+          const exists = activeId && courseData.courses.some((c: any) => c.offering?.id === activeId);
+          const targetId = exists ? activeId : courseData.courses.find((c: any) => c.offering?.id)?.offering?.id;
           if (targetId) {
             setOfferingId(targetId);
             if (typeof window !== "undefined") {

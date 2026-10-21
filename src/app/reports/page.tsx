@@ -46,9 +46,9 @@ export default function ReportsPage() {
           const stored = typeof window !== "undefined" ? localStorage.getItem("outcomeX_active_offering_id") : null;
           const param = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("offeringId") : null;
           const activeId = param || stored;
-          const exists = activeId && data.courses.some((c: any) => (c.offering?.id || c.id) === activeId);
+          const exists = activeId && data.courses.some((c: any) => c.offering?.id === activeId);
           if (!exists) {
-            const firstOffId = data.courses[0].offering?.id || data.courses[0].id;
+            const firstOffId = data.courses.find((c: any) => c.offering?.id)?.offering?.id;
             if (firstOffId) {
               setOfferingId(firstOffId);
               if (typeof window !== "undefined") {
@@ -72,7 +72,7 @@ export default function ReportsPage() {
     }
   }, []);
 
-  const currentCourse = courses.find((c) => (c.offering?.id || c.id) === offeringId) || {
+  const currentCourse = courses.find((c) => c.offering?.id === offeringId) || {
     course_code: "25UCS624T",
     course_name: "Artificial Intelligence",
     studentsCount: 0,
@@ -233,8 +233,8 @@ export default function ReportsPage() {
                   onChange={(e) => handleSelectOffering(e.target.value)}
                   className="bg-transparent font-bold text-slate-900 dark:text-white focus:outline-none cursor-pointer"
                 >
-                  {courses.map((c) => {
-                    const offId = c.offering?.id || c.id;
+                  {courses.filter((c) => c.offering?.id).map((c) => {
+                    const offId = c.offering.id;
                     return (
                       <option key={offId} value={offId} className="dark:bg-slate-900">
                         {c.course_code} - {c.course_name} (Sec {c.offering?.section || "A"})

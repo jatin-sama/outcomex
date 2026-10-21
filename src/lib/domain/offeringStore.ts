@@ -102,6 +102,41 @@ class OfferingDomainService {
       return await Promise.all(
         dbCourses.map(async (c: any) => {
           let offering = Array.isArray(c.course_offerings) ? c.course_offerings[0] : c.course_offerings;
+
+          if (!offering?.id) {
+            const { data: existingOff } = await db
+              .from("course_offerings")
+              .select("id, academic_year_id, teacher_id, section, attainment_scheme_id, created_at, updated_at")
+              .eq("course_id", c.id)
+              .maybeSingle();
+
+            if (existingOff) {
+              offering = existingOff;
+            } else {
+              const { data: ays } = await db.from("academic_years").select("id").eq("department_id", c.department_id).limit(1);
+              const { data: schemes } = await db.from("attainment_schemes").select("id").eq("department_id", c.department_id).limit(1);
+              const { data: teachers } = await db.from("profiles").select("id").limit(1);
+
+              if (ays?.[0]?.id && schemes?.[0]?.id && teachers?.[0]?.id) {
+                const newOffId = crypto.randomUUID();
+                const { data: createdOff } = await db
+                  .from("course_offerings")
+                  .insert({
+                    id: newOffId,
+                    course_id: c.id,
+                    academic_year_id: ays[0].id,
+                    teacher_id: teachers[0].id,
+                    section: "A",
+                    attainment_scheme_id: schemes[0].id,
+                  })
+                  .select()
+                  .maybeSingle();
+
+                if (createdOff) offering = createdOff;
+              }
+            }
+          }
+
           let studentsCount = 0;
           if (offering?.id) {
             const { count } = await db
@@ -133,7 +168,58 @@ class OfferingDomainService {
       );
     }
 
-    // Default reference course if database has not yet been seeded
+    // If database courses table has no records, check if department exists to seed reference course
+    const { data: cseDept } = await db.from("departments").select("id").eq("code", "CSE").maybeSingle();
+    if (cseDept?.id) {
+      const { data: ays } = await db.from("academic_years").select("id").eq("department_id", cseDept.id).limit(1);
+      const { data: schemes } = await db.from("attainment_schemes").select("id").eq("department_id", cseDept.id).limit(1);
+      const { data: teachers } = await db.from("profiles").select("id").limit(1);
+
+      if (ays?.[0]?.id && schemes?.[0]?.id && teachers?.[0]?.id) {
+        const courseId = "c0000000-0000-0000-0000-000000000001";
+        const offeringId = "f0000000-0000-0000-0000-000000000001";
+
+        const { data: newCourse } = await db
+          .from("courses")
+          .insert({
+            id: courseId,
+            department_id: cseDept.id,
+            course_code: "25UCS623T",
+            course_name: "Introduction to Data Science",
+            semester: "5th Sem",
+            year_of_study: "3rd Yr",
+          })
+          .select()
+          .maybeSingle();
+
+        if (newCourse) {
+          const { data: newOff } = await db
+            .from("course_offerings")
+            .insert({
+              id: offeringId,
+              course_id: courseId,
+              academic_year_id: ays[0].id,
+              teacher_id: teachers[0].id,
+              section: "A",
+              attainment_scheme_id: schemes[0].id,
+            })
+            .select()
+            .maybeSingle();
+
+          return [
+            {
+              ...newCourse,
+              studentsCount: 0,
+              cosCount: 6,
+              schemeName: "Autonomous 60/40 Scheme",
+              offering: newOff || INITIAL_OFFERING,
+            },
+          ];
+        }
+      }
+    }
+
+    // Default reference course fallback
     return [
       {
         ...INITIAL_COURSE,
@@ -296,34 +382,117 @@ class OfferingDomainService {
       throw new Error(`Invalid course offering ID "${offeringId}": must be a valid UUID.`);
     }
 
+    if (!studentsToAdd || studentsToAdd.length === 0) {
+      return { added: [], duplicates: [], totalCount: 0 };
+    }
+
     const db = await getDbClient();
 
-    // Query offering to find department
-    const { data: offering, error: offErr } = await db
+    // 1. Resolve offering and its course & department associations using actual DB relationship
+    let resolvedOfferingId = offeringId;
+    let { data: offering, error: offErr } = await db
       .from("course_offerings")
       .select(`
         id,
+        course_id,
         courses (
-          department_id
+          id,
+          department_id,
+          course_code,
+          course_name
         )
       `)
       .eq("id", offeringId)
-      .single();
+      .maybeSingle();
 
-    let deptId = "d0000000-0000-0000-0000-000000000001";
-    if (offering) {
-      const c: any = offering.courses;
-      deptId = Array.isArray(c) ? c[0]?.department_id : c?.department_id || deptId;
+    if (!offering) {
+      // Check if offeringId is actually a course_id and re-route if an offering exists
+      const { data: courseMatch } = await db
+        .from("courses")
+        .select(`
+          id,
+          department_id,
+          course_offerings (
+            id
+          )
+        `)
+        .eq("id", offeringId)
+        .maybeSingle();
+
+      if (courseMatch) {
+        const offList = Array.isArray(courseMatch.course_offerings)
+          ? courseMatch.course_offerings
+          : [courseMatch.course_offerings];
+        if (offList && offList[0]?.id) {
+          resolvedOfferingId = offList[0].id;
+          const { data: realOff } = await db
+            .from("course_offerings")
+            .select(`
+              id,
+              course_id,
+              courses (
+                id,
+                department_id,
+                course_code,
+                course_name
+              )
+            `)
+            .eq("id", resolvedOfferingId)
+            .maybeSingle();
+          offering = realOff;
+        }
+      }
     }
 
-    // Query existing enrollments for this offering
-    const { data: existingEnrollments } = await db
+    if (!offering) {
+      throw new Error(
+        `Course offering with ID "${offeringId}" not found in database. Please verify the offering exists before enrolling students.`
+      );
+    }
+
+    const courseData: any = offering.courses;
+    const resolvedDeptId = Array.isArray(courseData)
+      ? courseData[0]?.department_id
+      : courseData?.department_id;
+
+    if (!resolvedDeptId || !isValidUuid(resolvedDeptId)) {
+      throw new Error(
+        `Course offering "${resolvedOfferingId}" has no valid department association in database.`
+      );
+    }
+
+    // 2. Verify that the resolved department exists in the referenced departments table
+    const { data: deptRecord, error: deptErr } = await db
+      .from("departments")
+      .select("id, code, name")
+      .eq("id", resolvedDeptId)
+      .maybeSingle();
+
+    if (deptErr) {
+      throw new Error(`Database error verifying department "${resolvedDeptId}": ${deptErr.message}`);
+    }
+
+    if (!deptRecord) {
+      throw new Error(
+        `Referenced department "${resolvedDeptId}" does not exist in the departments table.`
+      );
+    }
+
+    // 3. Query existing enrollments for this offering to prevent duplicates
+    const { data: existingEnrollments, error: enrErr } = await db
       .from("enrollments")
-      .select("roll_no")
-      .eq("course_offering_id", offeringId);
+      .select("roll_no, student_id")
+      .eq("course_offering_id", resolvedOfferingId);
+
+    if (enrErr) {
+      throw new Error(`Database error querying existing enrollments: ${enrErr.message}`);
+    }
 
     const existingRolls = new Set(
       (existingEnrollments || []).map((e: any) => String(e.roll_no).trim().toLowerCase())
+    );
+    const existingStudentIds = new Set(
+      (existingEnrollments || []).map((e: any) => String(e.student_id))
     );
 
     const duplicates: string[] = [];
@@ -339,26 +508,64 @@ class OfferingDomainService {
         continue;
       }
 
-      existingRolls.add(roll.toLowerCase());
+      // Try database stored procedure enroll_student_in_offering first for atomic transaction
+      let rpcSucceeded = false;
+      try {
+        const { data: rpcResult, error: rpcErr } = await db.rpc("enroll_student_in_offering", {
+          p_offering_id: resolvedOfferingId,
+          p_roll_no: roll,
+          p_student_name: name,
+          p_status: st.status || "ENROLLED",
+        });
 
-      // 1. Find or create canonical student record
+        if (!rpcErr && rpcResult) {
+          if (rpcResult.success) {
+            existingRolls.add(roll.toLowerCase());
+            existingStudentIds.add(rpcResult.student_id);
+            added.push({
+              id: rpcResult.enrollment_id,
+              roll_no: rpcResult.roll_no,
+              student_name: rpcResult.student_name,
+              status: (st.status as any) || "ENROLLED",
+            });
+            rpcSucceeded = true;
+          } else if (rpcResult.status === "duplicate") {
+            duplicates.push(roll);
+            rpcSucceeded = true;
+          }
+        }
+      } catch {
+        // Fallback to table queries below if RPC is not deployed yet
+      }
+
+      if (rpcSucceeded) continue;
+
+      // Table query path: Find or reuse canonical student record in this department
       let studentId: string;
-      const { data: existingStudent } = await db
+      const { data: existingStudent, error: findStudErr } = await db
         .from("students")
-        .select("id")
-        .eq("department_id", deptId)
+        .select("id, student_name, department_id")
+        .eq("department_id", resolvedDeptId)
         .eq("university_reg_no", roll)
         .maybeSingle();
 
+      if (findStudErr) {
+        throw new Error(`Database error querying student record for Roll ${roll}: ${findStudErr.message}`);
+      }
+
       if (existingStudent?.id) {
         studentId = existingStudent.id;
+        if (existingStudentIds.has(studentId)) {
+          duplicates.push(roll);
+          continue;
+        }
       } else {
         const newStudentId = crypto.randomUUID();
         const { data: insertedStudent, error: sErr } = await db
           .from("students")
           .insert({
             id: newStudentId,
-            department_id: deptId,
+            department_id: resolvedDeptId,
             student_name: name,
             university_reg_no: roll,
           })
@@ -371,13 +578,13 @@ class OfferingDomainService {
         studentId = insertedStudent.id;
       }
 
-      // 2. Create unique enrollment for this offering
+      // Create unique enrollment for this offering
       const enrollmentId = crypto.randomUUID();
       const { data: insertedEnrollment, error: eErr } = await db
         .from("enrollments")
         .insert({
           id: enrollmentId,
-          course_offering_id: offeringId,
+          course_offering_id: resolvedOfferingId,
           student_id: studentId,
           roll_no: roll,
           status: st.status || "ENROLLED",
@@ -388,6 +595,9 @@ class OfferingDomainService {
       if (eErr || !insertedEnrollment) {
         throw new Error(`Failed to enroll student Roll ${roll} in offering: ${eErr?.message}`);
       }
+
+      existingRolls.add(roll.toLowerCase());
+      existingStudentIds.add(studentId);
 
       added.push({
         id: insertedEnrollment.id,
@@ -400,7 +610,7 @@ class OfferingDomainService {
     const { count: totalCount } = await db
       .from("enrollments")
       .select("*", { count: "exact", head: true })
-      .eq("course_offering_id", offeringId);
+      .eq("course_offering_id", resolvedOfferingId);
 
     return {
       added,

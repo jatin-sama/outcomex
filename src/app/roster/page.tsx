@@ -36,9 +36,9 @@ export default function StudentRosterPage() {
           const stored = typeof window !== "undefined" ? localStorage.getItem("outcomeX_active_offering_id") : null;
           const param = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("offeringId") : null;
           const activeId = param || stored;
-          const exists = activeId && data.courses.some((c: any) => (c.offering?.id || c.id) === activeId);
+          const exists = activeId && data.courses.some((c: any) => c.offering?.id === activeId);
           if (!exists) {
-            const firstOffId = data.courses[0].offering?.id || data.courses[0].id;
+            const firstOffId = data.courses.find((c: any) => c.offering?.id)?.offering?.id;
             if (firstOffId) {
               setOfferingId(firstOffId);
               if (typeof window !== "undefined") {
@@ -79,7 +79,7 @@ export default function StudentRosterPage() {
     loadRoster(offeringId);
   }, [offeringId]);
 
-  const currentCourse = courses.find((c) => (c.offering?.id || c.id) === offeringId) || {
+  const currentCourse = courses.find((c) => c.offering?.id === offeringId) || {
     course_code: INITIAL_COURSE.course_code,
     course_name: INITIAL_COURSE.course_name,
     offering: INITIAL_OFFERING,
@@ -173,9 +173,7 @@ export default function StudentRosterPage() {
         throw new Error(data.error || "Failed to add student");
       }
 
-      const updated = [...roster, ...data.added];
-      setRoster(updated);
-      localStorage.setItem("outcomeX_roster", JSON.stringify(updated));
+      await loadRoster(offeringId);
       setIsAddModalOpen(false);
       setNewRoll("");
       setNewName("");
@@ -220,9 +218,7 @@ export default function StudentRosterPage() {
         throw new Error(data.error || "Failed to import roster");
       }
 
-      const updated = [...roster, ...data.added];
-      setRoster(updated);
-      localStorage.setItem("outcomeX_roster", JSON.stringify(updated));
+      await loadRoster(offeringId);
       setIsBulkModalOpen(false);
       setBulkText("");
       setNotification({
@@ -320,8 +316,8 @@ export default function StudentRosterPage() {
                     onChange={(e) => handleSelectOffering(e.target.value)}
                     className="bg-transparent font-bold text-slate-900 dark:text-white focus:outline-none cursor-pointer"
                   >
-                    {courses.map((c) => {
-                      const offId = c.offering?.id || c.id;
+                    {courses.filter((c) => c.offering?.id).map((c) => {
+                      const offId = c.offering.id;
                       return (
                         <option key={offId} value={offId} className="dark:bg-slate-900">
                           {c.course_code} - {c.course_name} (Sec {c.offering?.section || "A"})

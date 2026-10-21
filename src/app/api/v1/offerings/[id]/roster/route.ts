@@ -129,9 +129,21 @@ export async function POST(
       added: result.added,
     });
   } catch (err: any) {
+    const msg = err.message || "Failed to add student(s) to roster";
+    let status = 500;
+    if (msg.includes("not found") || msg.includes("does not exist")) {
+      status = 404;
+    } else if (msg.includes("required") || msg.includes("Invalid")) {
+      status = 400;
+    } else if (msg.includes("already enrolled") || msg.includes("duplicate") || msg.includes("already exists")) {
+      status = 409;
+    } else if (msg.includes("Unauthorized") || msg.includes("access") || msg.includes("Authentication")) {
+      status = 403;
+    }
+
     return NextResponse.json(
-      { error: err.message || "Failed to add student(s) to roster" },
-      { status: 500 }
+      { error: msg },
+      { status }
     );
   }
 }
