@@ -311,24 +311,28 @@ export async function POST(
       })),
     };
 
-    // F. Generate Excel Workbook
-    const exportsDir = path.join(process.cwd(), "exports");
-    if (!fs.existsSync(exportsDir)) {
-      fs.mkdirSync(exportsDir, { recursive: true });
-    }
-
+    // F. Generate Excel Workbook in Memory
     const sanitizedCourseCode = courseCode.replace(/[^a-zA-Z0-9_-]/g, "_");
     const filename = `OutcomeX_Report_${schemeType}_${sanitizedCourseCode}_${Date.now()}.xlsx`;
-    const outputPath = path.join(exportsDir, filename);
 
     const genResult = await generateExcelReport(
       schemeType,
       courseData,
-      studentRecords,
-      outputPath
+      studentRecords
     );
 
     const reportRunId = crypto.randomUUID();
+    const storagePath = `reports/${id}/${reportRunId}.xlsx`;
+
+    // Try uploading to private Supabase Storage bucket 'reports'
+    try {
+      await db.storage.from("reports").upload(storagePath, genResult.buffer, {
+        contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        upsert: true,
+      });
+    } catch (storageErr: any) {
+      console.warn("Storage upload note:", storageErr.message);
+    }
 
     // G. Persist durable report record into PostgreSQL report_runs table
     const { data: insertedReport, error: repErr } = await db
@@ -345,8 +349,9 @@ export async function POST(
           student_count: studentRecords.length,
           generated_file: filename,
           summary: calculationResult.summary,
+          course_data: courseData,
         },
-        storage_file_path: outputPath,
+        storage_file_path: storagePath,
         file_checksum: genResult.sha256,
         status: "COMPLETED",
         workflow_status: "CALCULATED",
@@ -373,27 +378,44 @@ export async function POST(
           student_count: studentRecords.length,
           file_size_bytes: genResult.file_size_bytes,
           sha256: genResult.sha256,
+          storage_path: storagePath,
         },
       });
     } catch {}
 
-    const historyItem: ReportHistoryItem = {
-      id: reportRunId,
-      offering_id: id,
-      template_name: schemeType === "60_40" ? "Autonomous 60/40 Scheme" : "Autonomous 30/20 Scheme",
-      filename,
-      file_size_bytes: genResult.file_size_bytes,
-      sha256: genResult.sha256,
-      status: "COMPLETED",
-      workflow_status: "CALCULATED",
-      generated_at: new Date().toISOString(),
-      repaired_formulas: genResult.repaired_formulas,
-    };
+    // Support JSON format if explicitly requested by client
+    if (body.format === "json") {
+      const historyItem: ReportHistoryItem = {
+        id: reportRunId,
+        offering_id: id,
+        template_name: schemeType === "60_40" ? "Autonomous 60/40 Scheme" : "Autonomous 30/20 Scheme",
+        filename,
+        file_size_bytes: genResult.file_size_bytes,
+        sha256: genResult.sha256,
+        status: "COMPLETED",
+        workflow_status: "CALCULATED",
+        generated_at: new Date().toISOString(),
+        repaired_formulas: genResult.repaired_formulas,
+      };
 
-    return NextResponse.json({
-      success: true,
-      report: historyItem,
-      download_url: `/api/v1/reports/download?report_id=${reportRunId}&filename=${encodeURIComponent(filename)}`,
+      return NextResponse.json({
+        success: true,
+        report: historyItem,
+        download_url: `/api/v1/reports/download?report_id=${reportRunId}&filename=${encodeURIComponent(filename)}`,
+      });
+    }
+
+    // Return the generated .xlsx file directly from the export API with the correct MIME type
+    return new NextResponse(new Uint8Array(genResult.buffer), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Cache-Control": "no-store",
+        "X-Report-Id": reportRunId,
+        "X-File-Checksum": genResult.sha256,
+        "Access-Control-Expose-Headers": "Content-Disposition, X-Report-Id, X-File-Checksum",
+      },
     });
   } catch (err: any) {
     return NextResponse.json(

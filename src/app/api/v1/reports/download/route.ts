@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
-import fs from "fs";
 import { getAuthenticatedUser, authorizeOfferingAccess } from "@/lib/auth/authHelper";
 import { getDbClient } from "@/lib/supabase/admin";
-import { isValidUuid } from "@/lib/domain/offeringStore";
+import { isValidUuid, offeringStore } from "@/lib/domain/offeringStore";
+import { generateExcelReport } from "@/lib/excel/excelGenerator";
 
 export async function GET(request: NextRequest) {
   try {
@@ -75,28 +75,92 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 4. Secure path traversal sanitization: strictly locate file within exports/
     const targetFilename = path.basename(
       reportRecord?.storage_file_path || filename || "report.xlsx"
     );
 
-    // Explicitly reject any traversal attempts or attempts to access reference files
+    // Explicitly reject any path traversal attempts
     if (targetFilename.includes("..") || targetFilename.includes("/") || targetFilename.includes("\\")) {
       return NextResponse.json({ error: "Invalid filename." }, { status: 400 });
     }
 
-    const primaryExportsDir = path.join(process.cwd(), "exports");
-    const tmpExportsDir = path.join(require("os").tmpdir(), "exports");
+    // 4. Retrieve workbook bytes from durable Supabase Storage or regenerate in memory
+    let fileBuffer: Buffer | null = null;
+    const storagePath = reportRecord?.storage_file_path;
 
-    let resolvedPath = path.join(primaryExportsDir, targetFilename);
-    if (!fs.existsSync(resolvedPath)) {
-      resolvedPath = path.join(tmpExportsDir, targetFilename);
+    if (storagePath) {
+      try {
+        const { data: storageBlob, error: storageErr } = await db.storage
+          .from("reports")
+          .download(storagePath);
+
+        if (!storageErr && storageBlob) {
+          const ab = await storageBlob.arrayBuffer();
+          fileBuffer = Buffer.from(ab);
+        }
+      } catch (storageDownloadErr: any) {
+        console.warn("Storage download note:", storageDownloadErr.message);
+      }
     }
 
-    // NEVER serve from reference/ or arbitrary directories
-    if (!fs.existsSync(resolvedPath)) {
+    // Fallback: If not in storage bucket, dynamically regenerate the verified workbook in memory
+    if (!fileBuffer && reportRecord?.course_offering_id) {
+      const offeringId = reportRecord.course_offering_id;
+      const snapshot = reportRecord.calculation_snapshot || {};
+      const schemeType = snapshot.scheme || "60_40";
+
+      const { data: offering } = await db
+        .from("course_offerings")
+        .select(`
+          id,
+          section,
+          courses (
+            course_code,
+            course_name,
+            semester,
+            year_of_study,
+            departments ( code, name )
+          ),
+          academic_years ( year_label )
+        `)
+        .eq("id", offeringId)
+        .maybeSingle();
+
+      const c: any = offering?.courses;
+      const courseData = snapshot.course_data || {
+        course_code: (Array.isArray(c) ? c[0]?.course_code : c?.course_code) || "25UCS623T",
+        course_name: (Array.isArray(c) ? c[0]?.course_name : c?.course_name) || "Introduction to Data Science",
+        department: (Array.isArray(c) ? c[0]?.departments?.code : c?.departments?.code) || "CSE",
+        year_semester: Array.isArray(c)
+          ? `${c[0]?.year_of_study || "3rd Yr"} / ${c[0]?.semester || "5th Sem"}`
+          : `${c?.year_of_study || "3rd Yr"} / ${c?.semester || "5th Sem"}`,
+        academic_year: (Array.isArray(offering?.academic_years) ? (offering?.academic_years as any)[0]?.year_label : (offering?.academic_years as any)?.year_label) || "2025-26",
+        section: offering?.section || "A",
+      };
+
+      const roster = await offeringStore.getRoster(offeringId);
+      const { marks } = await offeringStore.getMarks(offeringId);
+
+      const studentRecords = roster.map((student) => {
+        const stMark = marks.find(
+          (m) => String(m.roll_no).trim().toLowerCase() === String(student.roll_no).trim().toLowerCase()
+        );
+        return {
+          roll_no: student.roll_no,
+          student_name: student.student_name,
+          marks: (stMark?.marks || {}) as Record<string, any>,
+        };
+      });
+
+      if (studentRecords.length > 0) {
+        const genResult = await generateExcelReport(schemeType, courseData, studentRecords);
+        fileBuffer = genResult.buffer;
+      }
+    }
+
+    if (!fileBuffer) {
       return NextResponse.json(
-        { error: "Requested report file is not available on disk." },
+        { error: "Requested report could not be retrieved or regenerated." },
         { status: 404 }
       );
     }
@@ -117,9 +181,8 @@ export async function GET(request: NextRequest) {
       });
     } catch {}
 
-    const fileBuffer = fs.readFileSync(resolvedPath);
-
-    return new NextResponse(fileBuffer, {
+    return new NextResponse(new Uint8Array(fileBuffer), {
+      status: 200,
       headers: {
         "Content-Disposition": `attachment; filename="${targetFilename}"`,
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -3,6 +3,28 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 
+export function resolveTemplatePath(): string {
+  const candidatePaths = [
+    path.join(process.cwd(), "reference", "Autonomous_Attainment_IDS_3rd _25_26 (2).xlsx"),
+    path.resolve(process.cwd(), "reference", "Autonomous_Attainment_IDS_3rd _25_26 (2).xlsx"),
+    path.join(__dirname, "../../../reference", "Autonomous_Attainment_IDS_3rd _25_26 (2).xlsx"),
+    path.join(__dirname, "../../../../reference", "Autonomous_Attainment_IDS_3rd _25_26 (2).xlsx"),
+    path.join(process.cwd(), ".next", "server", "reference", "Autonomous_Attainment_IDS_3rd _25_26 (2).xlsx"),
+  ];
+
+  for (const candidate of candidatePaths) {
+    try {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch {}
+  }
+
+  throw new Error(
+    `Reference workbook template not found at any candidate path:\n${candidatePaths.map((p) => ` - ${p}`).join("\n")}`
+  );
+}
+
 export const REFERENCE_WORKBOOK_PATH = path.join(
   process.cwd(),
   "reference",
@@ -28,28 +50,28 @@ export interface StudentMarksRecord {
 export interface GenerateResult {
   success: boolean;
   filename: string;
-  outputPath: string;
+  outputPath?: string;
   file_size_bytes: number;
   sha256: string;
   repaired_formulas?: string[];
+  buffer: Buffer;
 }
 
 export async function generateExcelReport(
   schemeType: "60_40" | "30_20" | string,
   courseData: CourseMetadata,
   studentRecords: StudentMarksRecord[],
-  outputPath: string
+  outputPath?: string
 ): Promise<GenerateResult> {
   if (!studentRecords || studentRecords.length === 0) {
     throw new Error("Cannot generate report: No student records provided for offering.");
   }
 
-  if (!fs.existsSync(REFERENCE_WORKBOOK_PATH)) {
-    throw new Error(`Reference workbook template not found at ${REFERENCE_WORKBOOK_PATH}`);
-  }
+  const templatePath = resolveTemplatePath();
+  const templateBuffer = fs.readFileSync(templatePath);
 
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(REFERENCE_WORKBOOK_PATH);
+  await workbook.xlsx.load(templateBuffer as any);
 
   const sheetName = schemeType.includes("30") ? "For 30_20 (Final)" : "For 60_40 (final)";
   const worksheet = workbook.getWorksheet(sheetName);
@@ -260,25 +282,35 @@ export async function generateExcelReport(
     }
   }
 
-  // Ensure output directory exists
-  const outputDir = path.dirname(outputPath);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
+  // Generate workbook directly in memory as a Node.js Buffer
+  const arrayBuffer = await workbook.xlsx.writeBuffer();
+  const fileBuffer = Buffer.from(arrayBuffer);
+  const sha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+
+  // If outputPath was explicitly provided, attempt writing to disk without breaking in-memory execution
+  if (outputPath) {
+    try {
+      const outputDir = path.dirname(outputPath);
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+      fs.writeFileSync(outputPath, fileBuffer);
+    } catch (writeErr: any) {
+      console.warn(`Filesystem write skipped (${outputPath}): ${writeErr.message}`);
+    }
   }
 
-  // Save workbook to output destination
-  await workbook.xlsx.writeFile(outputPath);
-
-  const stats = fs.statSync(outputPath);
-  const fileBuffer = fs.readFileSync(outputPath);
-  const sha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+  const filename = outputPath
+    ? path.basename(outputPath)
+    : `OutcomeX_Report_${schemeType}_${(courseData.course_code || "COURSE").replace(/[^a-zA-Z0-9_-]/g, "_")}_${Date.now()}.xlsx`;
 
   return {
     success: true,
-    filename: path.basename(outputPath),
-    outputPath,
-    file_size_bytes: stats.size,
+    filename,
+    outputPath: outputPath || "",
+    file_size_bytes: fileBuffer.length,
     sha256,
     repaired_formulas: repairedFormulas,
+    buffer: fileBuffer,
   };
 }

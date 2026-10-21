@@ -30,6 +30,8 @@ export default function ReportsPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [currentDownloadUrl, setCurrentDownloadUrl] = useState<string | null>(null);
   const [history, setHistory] = useState<any[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Reopen Modal State
   const [reopenModalReportId, setReopenModalReportId] = useState<string | null>(null);
@@ -107,22 +109,65 @@ export default function ReportsPage() {
 
 
   const handleGenerate = async () => {
+    if (isGenerating) return; // Prevent duplicate concurrent requests
     setIsGenerating(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
     setCurrentDownloadUrl(null);
+
     try {
       const res = await fetch(`/api/v1/offerings/${offeringId}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ schemeType: selectedScheme, action: "GENERATE" }),
       });
-      const data = await res.json();
 
-      if (!res.ok) throw new Error(data.error || "Generation failed");
+      if (!res.ok) {
+        let errorMsg = "Report generation failed";
+        try {
+          const errData = await res.json();
+          errorMsg = errData.error || errorMsg;
+        } catch {
+          errorMsg = `Server returned status ${res.status}: ${res.statusText}`;
+        }
+        throw new Error(errorMsg);
+      }
 
-      setCurrentDownloadUrl(data.download_url);
-      fetchHistory();
+      const contentType = res.headers.get("content-type") || "";
+
+      if (contentType.includes("spreadsheetml") || contentType.includes("octet-stream") || contentType.includes("zip")) {
+        const blob = await res.blob();
+
+        let filename = `OutcomeX_Report_${selectedScheme}_${offeringId.substring(0, 8)}.xlsx`;
+        const disposition = res.headers.get("content-disposition");
+        if (disposition && disposition.includes("filename=")) {
+          const match = disposition.match(/filename=["']?([^"';]+)["']?/i);
+          if (match && match[1]) {
+            filename = decodeURIComponent(match[1].trim());
+          }
+        }
+
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(blobUrl);
+
+        setSuccessMessage(`Report generated and downloaded successfully: ${filename}`);
+      } else {
+        const data = await res.json();
+        if (data.download_url) {
+          setCurrentDownloadUrl(data.download_url);
+          window.location.href = data.download_url;
+        }
+      }
+
+      await fetchHistory();
     } catch (err: any) {
-      alert(`Generation failed: ${err.message}`);
+      setErrorMessage(err.message || "Failed to generate Excel report.");
     } finally {
       setIsGenerating(false);
     }
@@ -246,6 +291,41 @@ export default function ReportsPage() {
             )}
           </div>
 
+          {errorMessage && (
+            <div className="rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 p-4 text-xs text-rose-800 dark:text-rose-300 flex items-start justify-between gap-3 shadow-xs">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400 mt-0.5" />
+                <div>
+                  <p className="font-bold">Report Generation Failed</p>
+                  <p className="mt-0.5">{errorMessage}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setErrorMessage(null)}
+                className="text-rose-500 hover:text-rose-700 text-xs font-bold px-1.5 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {successMessage && (
+            <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 p-4 text-xs text-emerald-800 dark:text-emerald-300 flex items-start justify-between gap-3 shadow-xs">
+              <div className="flex items-start gap-2.5">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400 mt-0.5" />
+                <div>
+                  <p className="font-bold">Download Completed</p>
+                  <p className="mt-0.5">{successMessage}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSuccessMessage(null)}
+                className="text-emerald-500 hover:text-emerald-700 text-xs font-bold px-1.5 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Generation Configuration Card */}
@@ -521,7 +601,7 @@ export default function ReportsPage() {
                         </td>
                         <td className="py-3 px-3 text-center font-sans">
                           <a
-                            href={`/api/v1/reports/download?filename=${encodeURIComponent(rep.filename)}`}
+                            href={`/api/v1/reports/download?report_id=${encodeURIComponent(rep.id)}&filename=${encodeURIComponent(rep.filename)}`}
                             className="text-sky-600 hover:text-sky-700 font-bold inline-flex items-center gap-1"
                           >
                             <Download className="h-3.5 w-3.5" />
