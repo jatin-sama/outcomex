@@ -83,33 +83,78 @@ export async function POST(
         }
       }
 
+      // Fetch existing report to validate transition state machine
+      const { data: existingReport, error: fetchErr } = await db
+        .from("report_runs")
+        .select("*")
+        .eq("id", reportId)
+        .maybeSingle();
+
+      if (fetchErr || !existingReport) {
+        return NextResponse.json(
+          { error: `Report record "${reportId}" not found.` },
+          { status: 404 }
+        );
+      }
+
+      const currentWorkflowStatus = existingReport.workflow_status || "CALCULATED";
       let updatedStatus: ReportHistoryItem["workflow_status"] = "CALCULATED";
       const updatePayload: Record<string, any> = {
         updated_at: new Date().toISOString(),
       };
 
       if (action === "SUBMIT") {
+        if (currentWorkflowStatus !== "CALCULATED" && currentWorkflowStatus !== "DRAFT") {
+          return NextResponse.json(
+            { error: `Cannot submit report in "${currentWorkflowStatus}" status. Only CALCULATED or DRAFT reports can be submitted.` },
+            { status: 400 }
+          );
+        }
         updatedStatus = "SUBMITTED";
         updatePayload.workflow_status = "SUBMITTED";
         updatePayload.submitted_by = authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null;
         updatePayload.submitted_at = new Date().toISOString();
       } else if (action === "APPROVE") {
+        if (currentWorkflowStatus !== "SUBMITTED" && currentWorkflowStatus !== "UNDER_REVIEW") {
+          return NextResponse.json(
+            { error: `Cannot approve report in "${currentWorkflowStatus}" status. Report must be SUBMITTED before approval.` },
+            { status: 400 }
+          );
+        }
         updatedStatus = "APPROVED";
         updatePayload.workflow_status = "APPROVED";
         updatePayload.reviewed_by = authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null;
         updatePayload.reviewed_at = new Date().toISOString();
         updatePayload.reviewer_comments = comments || "Approved by Department HOD.";
       } else if (action === "REJECT") {
+        if (currentWorkflowStatus !== "SUBMITTED" && currentWorkflowStatus !== "UNDER_REVIEW") {
+          return NextResponse.json(
+            { error: `Cannot request revisions for report in "${currentWorkflowStatus}" status. Report must be SUBMITTED.` },
+            { status: 400 }
+          );
+        }
         updatedStatus = "DRAFT";
         updatePayload.workflow_status = "DRAFT";
         updatePayload.reviewed_by = authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null;
         updatePayload.reviewed_at = new Date().toISOString();
         updatePayload.reviewer_comments = comments || "Revisions requested by reviewer.";
       } else if (action === "LOCK") {
+        if (currentWorkflowStatus !== "APPROVED") {
+          return NextResponse.json(
+            { error: `Cannot lock report in "${currentWorkflowStatus}" status. Report must be APPROVED before locking.` },
+            { status: 400 }
+          );
+        }
         updatedStatus = "LOCKED";
         updatePayload.workflow_status = "LOCKED";
         updatePayload.locked_at = new Date().toISOString();
       } else if (action === "REOPEN") {
+        if (currentWorkflowStatus !== "LOCKED") {
+          return NextResponse.json(
+            { error: `Cannot reopen report in "${currentWorkflowStatus}" status. Only LOCKED reports can be reopened.` },
+            { status: 400 }
+          );
+        }
         if (!reason || !reason.trim()) {
           return NextResponse.json(
             { error: "A valid authorized reason is required to reopen a locked report." },
@@ -122,12 +167,28 @@ export async function POST(
         updatePayload.reopen_reason = reason.trim();
       }
 
-      const { data: updatedReport, error: updateErr } = await db
+      let { data: updatedReport, error: updateErr } = await db
         .from("report_runs")
         .update(updatePayload)
         .eq("id", reportId)
         .select()
         .single();
+
+      if (updateErr && updateErr.message?.includes("workflow_status")) {
+        try {
+          await db.rpc("reload_schema_cache");
+          const retryRes = await db
+            .from("report_runs")
+            .update(updatePayload)
+            .eq("id", reportId)
+            .select()
+            .single();
+          if (!retryRes.error) {
+            updatedReport = retryRes.data;
+            updateErr = null;
+          }
+        } catch {}
+      }
 
       if (updateErr) {
         throw new Error(`Failed to update report workflow status in database: ${updateErr.message}`);
@@ -335,31 +396,55 @@ export async function POST(
     }
 
     // G. Persist durable report record into PostgreSQL report_runs table
-    const { data: insertedReport, error: repErr } = await db
+    const generatedBy = authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null;
+    const insertPayload: Record<string, any> = {
+      id: reportRunId,
+      course_offering_id: id,
+      template_version_id: schemeType === "30_20"
+        ? "70000000-0000-0000-0000-000000000002"
+        : "70000000-0000-0000-0000-000000000001",
+      generated_by: generatedBy,
+      calculation_snapshot: {
+        scheme: schemeType,
+        student_count: studentRecords.length,
+        generated_file: filename,
+        summary: calculationResult.summary,
+        course_data: courseData,
+      },
+      storage_file_path: storagePath,
+      file_checksum: genResult.sha256,
+      status: "COMPLETED",
+      workflow_status: "CALCULATED",
+    };
+
+    let { data: insertedReport, error: repErr } = await db
       .from("report_runs")
-      .insert({
-        id: reportRunId,
-        course_offering_id: id,
-        template_version_id: schemeType === "30_20"
-          ? "70000000-0000-0000-0000-000000000002"
-          : "70000000-0000-0000-0000-000000000001",
-        generated_by: authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null,
-        calculation_snapshot: {
-          scheme: schemeType,
-          student_count: studentRecords.length,
-          generated_file: filename,
-          summary: calculationResult.summary,
-          course_data: courseData,
-        },
-        storage_file_path: storagePath,
-        file_checksum: genResult.sha256,
-        status: "COMPLETED",
-        workflow_status: "CALCULATED",
-      })
+      .insert(insertPayload)
       .select()
       .single();
 
+    // If PostgREST schema cache has not yet refreshed workflow_status, trigger reload and retry
+    if (repErr && (repErr.message?.includes("workflow_status") || repErr.code === "PGRST204" || repErr.message?.includes("schema cache"))) {
+      try {
+        await db.rpc("reload_schema_cache");
+        const retryResult = await db
+          .from("report_runs")
+          .insert(insertPayload)
+          .select()
+          .single();
+        if (!retryResult.error) {
+          insertedReport = retryResult.data;
+          repErr = null;
+        }
+      } catch {}
+    }
+
     if (repErr) {
+      if (repErr.message?.includes("workflow_status") || repErr.message?.includes("schema cache")) {
+        throw new Error(
+          `Database schema mismatch: Column 'workflow_status' is missing in 'report_runs' table or schema cache. Please apply Migration 20261021000009_ensure_report_runs_workflow_lifecycle.sql in your Supabase SQL Editor.`
+        );
+      }
       throw new Error(`Failed to persist report run in database: ${repErr.message}`);
     }
 
