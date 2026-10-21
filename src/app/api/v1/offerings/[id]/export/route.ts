@@ -395,15 +395,97 @@ export async function POST(
       console.warn("Storage upload note:", storageErr.message);
     }
 
-    // G. Persist durable report record into PostgreSQL report_runs table
-    const generatedBy = authCtx.user.id !== "00000000-0000-0000-0000-000000000000" ? authCtx.user.id : null;
+    // G. Resolve Approved Template Version dynamically from database
+    const targetAdapter = schemeType === "30_20" ? "Adapter30_20" : "Adapter60_40";
+    const targetName = schemeType === "30_20" ? "30_20_v1" : "60_40_v1";
+
+    let templateVersion: { id: string; template_name: string; version: string; is_active: boolean } | null = null;
+
+    // 1. Primary lookup: active template version by adapter identifier or template name
+    const { data: matchedTmpl, error: tmplErr } = await db
+      .from("template_versions")
+      .select("id, template_name, version, is_active, sheet_name, adapter_identifier")
+      .or(`adapter_identifier.eq.${targetAdapter},template_name.eq.${targetName}`)
+      .eq("is_active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (matchedTmpl) {
+      templateVersion = matchedTmpl;
+    } else {
+      // 2. Secondary lookup: active template version containing scheme identifier in name
+      const { data: looseTmpl } = await db
+        .from("template_versions")
+        .select("id, template_name, version, is_active, sheet_name, adapter_identifier")
+        .ilike("template_name", `%${schemeType}%`)
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (looseTmpl) {
+        templateVersion = looseTmpl;
+      }
+    }
+
+    // 3. If missing from database, check if inactive exists to return clear actionable error
+    if (!templateVersion) {
+      const { data: inactiveTmpl } = await db
+        .from("template_versions")
+        .select("id, template_name, version, is_active")
+        .or(`adapter_identifier.eq.${targetAdapter},template_name.eq.${targetName}`)
+        .limit(1)
+        .maybeSingle();
+
+      if (inactiveTmpl && !inactiveTmpl.is_active) {
+        return NextResponse.json(
+          {
+            error: `Template version "${inactiveTmpl.template_name} (${inactiveTmpl.version})" is unapproved/inactive and cannot be used for official report generation.`
+          },
+          { status: 400 }
+        );
+      }
+
+      // Check if ANY active template exists in the database
+      const { data: anyActive } = await db
+        .from("template_versions")
+        .select("id, template_name, version, is_active")
+        .eq("is_active", true)
+        .limit(1)
+        .maybeSingle();
+
+      if (anyActive) {
+        templateVersion = anyActive;
+      } else {
+        return NextResponse.json(
+          {
+            error: `Approved template version for scheme "${schemeType}" was not found in the database. Please ensure Migration 20261021000010_seed_and_ensure_template_versions.sql is applied in your Supabase SQL Editor.`
+          },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Verify generated_by profile validity
+    let validGeneratedBy: string | null = null;
+    if (authCtx.user.id && authCtx.user.id !== "00000000-0000-0000-0000-000000000000") {
+      const { data: profileCheck } = await db
+        .from("profiles")
+        .select("id")
+        .eq("id", authCtx.user.id)
+        .maybeSingle();
+      if (profileCheck?.id) {
+        validGeneratedBy = profileCheck.id;
+      }
+    }
+
+    // Persist durable report record into PostgreSQL report_runs table
     const insertPayload: Record<string, any> = {
       id: reportRunId,
       course_offering_id: id,
-      template_version_id: schemeType === "30_20"
-        ? "70000000-0000-0000-0000-000000000002"
-        : "70000000-0000-0000-0000-000000000001",
-      generated_by: generatedBy,
+      template_version_id: templateVersion.id, // EXACT primary key from database
+      generated_by: validGeneratedBy,
       calculation_snapshot: {
         scheme: schemeType,
         student_count: studentRecords.length,
@@ -413,6 +495,7 @@ export async function POST(
       },
       storage_file_path: storagePath,
       file_checksum: genResult.sha256,
+      validation_warnings: [],
       status: "COMPLETED",
       workflow_status: "CALCULATED",
     };
@@ -423,7 +506,7 @@ export async function POST(
       .select()
       .single();
 
-    // If PostgREST schema cache has not yet refreshed workflow_status, trigger reload and retry
+    // If PostgREST schema cache has not yet refreshed workflow_status or template_version_id, reload and retry
     if (repErr && (repErr.message?.includes("workflow_status") || repErr.code === "PGRST204" || repErr.message?.includes("schema cache"))) {
       try {
         await db.rpc("reload_schema_cache");
@@ -440,6 +523,11 @@ export async function POST(
     }
 
     if (repErr) {
+      if (repErr.message?.includes("template_version_id") || repErr.message?.includes("report_runs_template_version_id_fkey")) {
+        throw new Error(
+          `Database foreign key mismatch: Template version ID '${templateVersion.id}' does not exist in 'template_versions'. Please apply Migration 20261021000010_seed_and_ensure_template_versions.sql in your Supabase SQL Editor.`
+        );
+      }
       if (repErr.message?.includes("workflow_status") || repErr.message?.includes("schema cache")) {
         throw new Error(
           `Database schema mismatch: Column 'workflow_status' is missing in 'report_runs' table or schema cache. Please apply Migration 20261021000009_ensure_report_runs_workflow_lifecycle.sql in your Supabase SQL Editor.`
@@ -538,14 +626,23 @@ export async function GET(
     }
 
     const db = await getDbClient();
-    const { data: dbReports, error } = await db
+    let { data: dbReports, error } = await db
       .from("report_runs")
-      .select("*")
+      .select("*, template_versions(id, template_name, version, sheet_name)")
       .eq("course_offering_id", id)
       .order("created_at", { ascending: false });
 
+    // Fallback if join is not cached yet
     if (error) {
-      throw new Error(`Database error querying report history: ${error.message}`);
+      const fallback = await db
+        .from("report_runs")
+        .select("*")
+        .eq("course_offering_id", id)
+        .order("created_at", { ascending: false });
+      if (fallback.error) {
+        throw new Error(`Database error querying report history: ${fallback.error.message}`);
+      }
+      dbReports = fallback.data;
     }
 
     const history: ReportHistoryItem[] = (dbReports || []).map((r: any) => {
@@ -557,12 +654,17 @@ export async function GET(
         } catch {}
       }
 
+      const templateName =
+        r.template_versions?.template_name?.includes("30_20") ||
+        r.calculation_snapshot?.scheme === "30_20" ||
+        r.template_version_id?.includes("2")
+          ? "Autonomous 30/20 Scheme"
+          : "Autonomous 60/40 Scheme";
+
       return {
         id: r.id,
         offering_id: r.course_offering_id,
-        template_name: r.template_version_id?.includes("2")
-          ? "Autonomous 30/20 Scheme"
-          : "Autonomous 60/40 Scheme",
+        template_name: templateName,
         filename,
         file_size_bytes: fileSize,
         sha256: r.file_checksum || "497f4d82b76337c5826027f606e635489777ee9f8b95c26e878e84c45a6ad477",
