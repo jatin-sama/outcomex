@@ -208,3 +208,16 @@ export const INITIAL_ASSESSMENTS: AssessmentComponent[] = [
   { id: "e0000000-0000-0000-0001-000000000012", course_offering_id: INITIAL_OFFERING.id, category: "END_SEM", component_name: "ESE CO6", max_marks: 8, sort_order: 12, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
   { id: "e0000000-0000-0000-0001-000000000013", course_offering_id: INITIAL_OFFERING.id, category: "TEACHER_ASSESSMENT", component_name: "Teacher Assessment (TA)", max_marks: 10, sort_order: 13, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
 ];
+
+// Initial assessment components for 30/20 Autonomous Scheme (4 COs)
+export const INITIAL_30_20_ASSESSMENTS: AssessmentComponent[] = [
+  { id: "e0000000-0000-0000-0002-000000000001", course_offering_id: INITIAL_OFFERING.id, category: "MID_TERM_1", component_name: "MT1 Q1 (CO1)", max_marks: 10, sort_order: 1, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
+  { id: "e0000000-0000-0000-0002-000000000002", course_offering_id: INITIAL_OFFERING.id, category: "MID_TERM_1", component_name: "MT1 Q2 (CO2)", max_marks: 10, sort_order: 2, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
+  { id: "e0000000-0000-0000-0002-000000000003", course_offering_id: INITIAL_OFFERING.id, category: "MID_TERM_2", component_name: "MT2 Q1 (CO3)", max_marks: 10, sort_order: 3, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
+  { id: "e0000000-0000-0000-0002-000000000004", course_offering_id: INITIAL_OFFERING.id, category: "MID_TERM_2", component_name: "MT2 Q2 (CO4)", max_marks: 10, sort_order: 4, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
+  { id: "e0000000-0000-0000-0002-000000000005", course_offering_id: INITIAL_OFFERING.id, category: "END_SEM", component_name: "ESE CO1", max_marks: 8, sort_order: 5, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
+  { id: "e0000000-0000-0000-0002-000000000006", course_offering_id: INITIAL_OFFERING.id, category: "END_SEM", component_name: "ESE CO2", max_marks: 8, sort_order: 6, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
+  { id: "e0000000-0000-0000-0002-000000000007", course_offering_id: INITIAL_OFFERING.id, category: "END_SEM", component_name: "ESE CO3", max_marks: 12, sort_order: 7, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
+  { id: "e0000000-0000-0000-0002-000000000008", course_offering_id: INITIAL_OFFERING.id, category: "END_SEM", component_name: "ESE CO4", max_marks: 12, sort_order: 8, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
+  { id: "e0000000-0000-0000-0002-000000000009", course_offering_id: INITIAL_OFFERING.id, category: "TEACHER_ASSESSMENT", component_name: "Teacher Assessment (TA)", max_marks: 10, sort_order: 9, created_at: "2026-10-18T00:00:00.000Z", updated_at: "2026-10-18T00:00:00.000Z" },
+];

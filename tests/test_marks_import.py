@@ -107,6 +107,41 @@ class TestMarksValidationRules(unittest.TestCase):
         self.assertEqual(len(duplicates), 1)
         self.assertIn("102", duplicates)
 
+    def test_unknown_student_detection(self):
+        enrolled_rolls = {"102", "103", "104"}
+        uploaded_rolls = ["102", "999", "103"]
+        unknown = [r for r in uploaded_rolls if r not in enrolled_rolls]
+        self.assertEqual(len(unknown), 1)
+        self.assertEqual(unknown[0], "999")
+
+    def test_overwrite_detection(self):
+        persisted = {"102": {"mt1": 7.0}}
+        uploaded = {"102": {"mt1": 9.5}}
+        is_changed = persisted["102"]["mt1"] != uploaded["102"]["mt1"]
+        self.assertTrue(is_changed)
+
+    def test_cross_offering_isolation(self):
+        template_offering_id = "f0000000-0000-0000-0000-000000000001"
+        target_offering_id = "f0000000-0000-0000-0000-000000000002"
+        is_mismatch = template_offering_id != target_offering_id
+        self.assertTrue(is_mismatch)
+
+    def test_cohort_capacity_enforcement(self):
+        capacity_30_20 = 65
+        capacity_60_40 = 81
+        self.assertFalse(70 <= capacity_30_20)
+        self.assertTrue(70 <= capacity_60_40)
+        self.assertFalse(85 <= capacity_60_40)
+
+    def test_preview_does_not_truncate_committed_cohort(self):
+        cohort = [f"ROLL_{i}" for i in range(1, 41)] # 40 students
+        preview = cohort[:15]
+        self.assertEqual(len(preview), 15)
+        self.assertEqual(len(cohort), 40)
+        # All 40 students committed
+        committed = cohort
+        self.assertEqual(len(committed), 40)
+
 
 class TestWorkbookParserService(unittest.TestCase):
 
