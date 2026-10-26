@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { offeringStore } from "@/lib/domain/offeringStore";
 import { getAuthenticatedUser } from "@/lib/auth/authHelper";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const courses = await offeringStore.getCourses();
+    const authCtx = await getAuthenticatedUser(request);
+    const courses = await offeringStore.getCourses(authCtx);
     return NextResponse.json({ courses });
   } catch (err: any) {
     return NextResponse.json(

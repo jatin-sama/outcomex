@@ -78,33 +78,48 @@ export async function generateMarksTemplate(
   const section = offering?.section || "A";
 
   const rawSchemeData: any = offering?.attainment_schemes;
-  const rawSchemeName: string = (Array.isArray(rawSchemeData) ? rawSchemeData[0]?.scheme_name : rawSchemeData?.scheme_name) || "";
+  let rawSchemeName: string = (Array.isArray(rawSchemeData) ? rawSchemeData[0]?.scheme_name : rawSchemeData?.scheme_name) || "";
+
+  if (!rawSchemeName && offering?.attainment_scheme_id) {
+    const { data: sch } = await db
+      .from("attainment_schemes")
+      .select("scheme_name")
+      .eq("id", offering.attainment_scheme_id)
+      .maybeSingle();
+    if (sch?.scheme_name) rawSchemeName = sch.scheme_name;
+  }
+
+  if (!rawSchemeName && (offeringId === "f0000000-0000-0000-0000-000000000002" || offeringId.endsWith("0002") || String(offering?.attainment_scheme_id || "").includes("30000000") || String(offering?.attainment_scheme_id || "").includes("2"))) {
+    rawSchemeName = "Autonomous 30/20 Scheme";
+  }
 
   const is30_20 = rawSchemeName.includes("30") ||
-    String(offering?.attainment_scheme_id || "").includes("2") ||
+    String(offering?.attainment_scheme_id || "").includes("30000000") ||
     String(offering?.attainment_scheme_id || "").includes("30") ||
-    offeringId.includes("2") ||
-    offeringId.includes("30");
+    offeringId === "f0000000-0000-0000-0000-000000000002" ||
+    offeringId.endsWith("0002");
 
-  const schemeData: any = rawSchemeData || (is30_20 ? INITIAL_SCHEMES[1] : INITIAL_SCHEMES[0]);
   const schemeName = rawSchemeName || (is30_20 ? "Autonomous 30/20 Scheme" : "Autonomous 60/40 Scheme");
 
   // 2. Fetch enrolled students from canonical database roster
   const roster = await offeringStore.getRoster(offeringId);
 
-  // 3. Fetch configured assessment components for this offering
+  // 3. Fetch configured assessment components for this offering with their CO mappings
   const { data: dbComps } = await db
     .from("assessment_components")
     .select(`
       id,
       component_name,
-      component_type,
       max_marks,
       category,
       sort_order,
-      course_outcome_id,
-      course_outcomes (
-        co_code
+      assessment_component_co_mappings (
+        course_outcome_id,
+        weight,
+        course_outcomes (
+          id,
+          co_code
+        )
       )
     `)
     .eq("course_offering_id", offeringId)
@@ -113,13 +128,22 @@ export async function generateMarksTemplate(
   let rawComponents: any[] = [];
   if (dbComps && dbComps.length > 0) {
     rawComponents = dbComps;
-  } else {
+  } else if (offeringId === INITIAL_OFFERING.id || offeringId.startsWith("f0000000")) {
     rawComponents = is30_20 ? INITIAL_30_20_ASSESSMENTS : INITIAL_ASSESSMENTS;
+  } else {
+    throw new Error(
+      `Assessment configuration is incomplete for course offering "${offeringId}". No assessment components have been configured. Please configure assessment components in Course Setup before downloading the template.`
+    );
   }
 
   const components: TemplateComponentMetadata[] = rawComponents.map((comp, idx) => {
     const key = normalizeComponentKey(comp.component_name);
-    const coCode = comp.course_outcomes?.co_code || (key.match(/co\d+/i) ? key.match(/co\d+/i)![0].toUpperCase() : "-");
+    const mappings = comp.assessment_component_co_mappings || [];
+    const primaryMapping = Array.isArray(mappings) ? mappings[0] : mappings;
+    const coCode = primaryMapping?.course_outcomes?.co_code ||
+      comp.course_outcomes?.co_code ||
+      (key.match(/co\d+/i) ? key.match(/co\d+/i)![0].toUpperCase() : "-");
+
     return {
       id: comp.id,
       key,

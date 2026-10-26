@@ -38,7 +38,7 @@ class OfferingDomainService {
   /**
    * Query all courses with their course offerings and active student counts from PostgreSQL.
    */
-  async getCourses(): Promise<any[]> {
+  async getCourses(authCtx?: { role?: string; department_id?: string; user?: { id: string }; isServiceRole?: boolean } | null): Promise<any[]> {
     const db = await getDbClient();
     const { data: dbCourses, error } = await db
       .from("courses")
@@ -58,7 +58,15 @@ class OfferingDomainService {
           section,
           attainment_scheme_id,
           created_at,
-          updated_at
+          updated_at,
+          attainment_schemes (
+            id,
+            scheme_name
+          ),
+          academic_years (
+            id,
+            year_label
+          )
         )
       `)
       .order("created_at", { ascending: false });
@@ -68,14 +76,50 @@ class OfferingDomainService {
     }
 
     if (dbCourses && dbCourses.length > 0) {
+      // Apply authorization filter if faculty teacher
+      let filteredCourses = dbCourses;
+      if (authCtx && !authCtx.isServiceRole) {
+        const teacherUserId = authCtx.user?.id;
+        if (authCtx.role === "teacher" && teacherUserId) {
+          filteredCourses = dbCourses.filter((c: any) => {
+            const offs = Array.isArray(c.course_offerings) ? c.course_offerings : [c.course_offerings];
+            return offs.some((o: any) => o?.teacher_id === teacherUserId || !o?.teacher_id);
+          });
+        } else if ((authCtx.role === "hod" || authCtx.role === "department_admin") && authCtx.department_id) {
+          filteredCourses = dbCourses.filter((c: any) => !c.department_id || c.department_id === authCtx.department_id);
+        }
+      }
+
       return await Promise.all(
-        dbCourses.map(async (c: any) => {
-          let offering = Array.isArray(c.course_offerings) ? c.course_offerings[0] : c.course_offerings;
+        filteredCourses.map(async (c: any) => {
+          let offerings = Array.isArray(c.course_offerings) ? c.course_offerings : [c.course_offerings];
+          const teacherUserId = authCtx?.user?.id;
+          if (authCtx && authCtx.role === "teacher" && teacherUserId) {
+            const assigned = offerings.find((o: any) => o?.teacher_id === teacherUserId);
+            if (assigned) offerings = [assigned];
+          }
+          let offering = offerings[0];
 
           if (!offering?.id) {
             const { data: existingOff } = await db
               .from("course_offerings")
-              .select("id, academic_year_id, teacher_id, section, attainment_scheme_id, created_at, updated_at")
+              .select(`
+                id,
+                academic_year_id,
+                teacher_id,
+                section,
+                attainment_scheme_id,
+                created_at,
+                updated_at,
+                attainment_schemes (
+                  id,
+                  scheme_name
+                ),
+                academic_years (
+                  id,
+                  year_label
+                )
+              `)
               .eq("course_id", c.id)
               .maybeSingle();
 
@@ -98,7 +142,23 @@ class OfferingDomainService {
                     section: "A",
                     attainment_scheme_id: schemes[0].id,
                   })
-                  .select()
+                  .select(`
+                    id,
+                    academic_year_id,
+                    teacher_id,
+                    section,
+                    attainment_scheme_id,
+                    created_at,
+                    updated_at,
+                    attainment_schemes (
+                      id,
+                      scheme_name
+                    ),
+                    academic_years (
+                      id,
+                      year_label
+                    )
+                  `)
                   .maybeSingle();
 
                 if (createdOff) offering = createdOff;
@@ -115,9 +175,18 @@ class OfferingDomainService {
             studentsCount = count || 0;
           }
 
-          const schemeName = offering?.attainment_scheme_id?.includes("2") || offering?.attainment_scheme_id?.includes("30")
-            ? "Autonomous 30/20 Scheme"
-            : "Autonomous 60/40 Scheme";
+          const rawScheme = offering?.attainment_schemes;
+          const schemeName = (Array.isArray(rawScheme) ? rawScheme[0]?.scheme_name : rawScheme?.scheme_name) ||
+            (offering?.attainment_scheme_id?.includes("2") || offering?.attainment_scheme_id?.includes("30")
+              ? "Autonomous 30/20 Scheme"
+              : "Autonomous 60/40 Scheme");
+
+          const { count: dbCosCount } = await db
+            .from("course_outcomes")
+            .select("*", { count: "exact", head: true })
+            .eq("course_id", c.id);
+
+          const cosCount = dbCosCount || (schemeName.includes("30") ? 4 : 6);
 
           return {
             id: c.id,
@@ -129,7 +198,7 @@ class OfferingDomainService {
             created_at: c.created_at,
             updated_at: c.updated_at,
             studentsCount,
-            cosCount: schemeName.includes("30") ? 4 : 6,
+            cosCount,
             schemeName,
             offering,
           };

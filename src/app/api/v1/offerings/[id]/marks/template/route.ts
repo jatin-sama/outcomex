@@ -57,9 +57,13 @@ export async function GET(
 
     return response;
   } catch (err: any) {
+    const isConfigIncomplete = err.message?.includes("Assessment configuration is incomplete") || err.message?.includes("No assessment components");
     return NextResponse.json(
-      { error: err.message || "Failed to generate marks import template" },
-      { status: 500 }
+      {
+        error: err.message || "Failed to generate marks import template",
+        code: isConfigIncomplete ? "INCOMPLETE_CONFIGURATION" : "GENERATION_ERROR",
+      },
+      { status: isConfigIncomplete ? 422 : 500 }
     );
   }
 }

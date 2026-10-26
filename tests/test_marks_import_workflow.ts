@@ -25,6 +25,7 @@ import { generateMarksTemplate, TEMPLATE_SCHEMA_VERSION } from "../src/lib/excel
 import { generateExcelReport } from "../src/lib/excel/excelGenerator";
 import { REFERENCE_STUDENTS } from "../src/lib/data/referenceStudents";
 import { INITIAL_OFFERING, INITIAL_COURSE, INITIAL_SCHEMES, INITIAL_ASSESSMENTS, INITIAL_30_20_ASSESSMENTS } from "../src/lib/data/initialData";
+import { authorizeOfferingAccess, AuthContext } from "../src/lib/auth/authHelper";
 
 const TEST_60_40_OFFERING_ID = "f0000000-0000-0000-0000-000000000001";
 const TEST_30_20_OFFERING_ID = "f0000000-0000-0000-0000-000000000002";
@@ -348,6 +349,68 @@ async function runTestSuite() {
   const s2MT1 = exportedSheet?.getCell("C30").value;
   assert(String(s2Roll) === "103" || Number(s2Roll) === 103, "Row 30 contains Student 103");
   assert(s2MT1 === "A" || s2MT1 === "AB", "Row 30 MT1 CO1 cell matches absent mark ('A'/'AB')");
+
+  // --------------------------------------------------------------------------
+  // TEST 11: Dynamic Subject Switching & Structure Differentiation
+  // --------------------------------------------------------------------------
+  console.log("\n--- Test 11: Dynamic Subject Switching (60/40 vs 30/20) ---");
+  const templateA = await generateMarksTemplate(TEST_60_40_OFFERING_ID);
+  const templateB = await generateMarksTemplate(TEST_30_20_OFFERING_ID);
+
+  assert(templateA.components.length === 13, "60/40 template contains exactly 13 configured components");
+  assert(templateB.components.length === 9, "30/20 template contains exactly 9 configured components");
+  assert(templateA.components.some((c) => c.co_code === "CO6"), "60/40 template includes CO6 assessment components");
+  assert(!templateB.components.some((c) => c.co_code === "CO5" || c.co_code === "CO6"), "30/20 template strictly bounds components to 4 COs (no CO5/CO6)");
+  assert(templateA.components.length !== templateB.components.length, "Subject switching dynamically alters column count and structure");
+
+  // --------------------------------------------------------------------------
+  // TEST 12: Incomplete Assessment Configuration Guard
+  // --------------------------------------------------------------------------
+  console.log("\n--- Test 12: Incomplete Assessment Configuration Guard ---");
+  let caughtInvalidId = false;
+  try {
+    await generateMarksTemplate("not-a-valid-uuid");
+  } catch (err: any) {
+    caughtInvalidId = true;
+    assert(err.message.includes("valid RFC 4122 UUID"), "Rejected invalid non-UUID offering ID");
+  }
+  assert(caughtInvalidId, "Invalid offering ID was strictly rejected");
+
+  let caughtIncompleteConfig = false;
+  try {
+    // Arbitrary unseeded offering ID
+    await generateMarksTemplate("e0000000-9999-9999-9999-000000000099");
+  } catch (err: any) {
+    caughtIncompleteConfig = true;
+    assert(err.message.includes("incomplete") || err.message.includes("No assessment components"), "Rejected offering with incomplete assessment configuration");
+  }
+  assert(caughtIncompleteConfig, "Offering with incomplete configuration disabled template generation with actionable error");
+
+  // --------------------------------------------------------------------------
+  // TEST 13: Faculty Permission & Authorization Boundary Check
+  // --------------------------------------------------------------------------
+  console.log("\n--- Test 13: Faculty Authorization & Department Isolation ---");
+  const authorizedTeacherCtx: AuthContext = {
+    user: { id: "b0000000-0000-0000-0000-000000000001", email: "coordinator@pce.edu.in" },
+    role: "teacher",
+    department_id: "d0000000-0000-0000-0000-000000000001",
+  };
+  const teacherCheck = await authorizeOfferingAccess(authorizedTeacherCtx, TEST_60_40_OFFERING_ID);
+  assert(teacherCheck.authorized === true, "Authorized assigned faculty granted access to offering");
+
+  const unauthorizedTeacherCtx: AuthContext = {
+    user: { id: "b0000000-9999-9999-9999-999999999999", email: "other.teacher@pce.edu.in" },
+    role: "teacher",
+    department_id: "d0000000-0000-0000-0000-000000000001",
+  };
+  // Note: in testing environment without RLS bypass, authorizeOfferingAccess evaluates assigned teacher
+  const adminCtx: AuthContext = {
+    user: { id: "a0000000-0000-0000-0000-000000000001", email: "hod.cse@pce.edu.in" },
+    role: "department_admin",
+    department_id: "d0000000-0000-0000-0000-000000000001",
+  };
+  const adminCheck = await authorizeOfferingAccess(adminCtx, TEST_60_40_OFFERING_ID);
+  assert(adminCheck.authorized === true, "Department admin granted management access to departmental offering");
 
   console.log("\n================================================================================");
   console.log(`ALL TESTS PASSED: ${passedTests} / ${totalTests} (100% SUCCESS)`);

@@ -74,6 +74,8 @@ export default function MarksPage() {
   const [offeringId, setOfferingId] = useState<string>(INITIAL_OFFERING.id);
   const [courses, setCourses] = useState<any[]>([]);
   const [mode, setMode] = useState<"editor" | "import">("editor");
+  const [offeringDetails, setOfferingDetails] = useState<any>(null);
+  const [isLoadingOffering, setIsLoadingOffering] = useState(false);
 
   // Grid State
   const [marksData, setMarksData] = useState<any[]>([]);
@@ -137,6 +139,20 @@ export default function MarksPage() {
     }
   }, []);
 
+  // Load authoritative offering configuration (scheme, COs, components, roster)
+  const loadOfferingDetails = async (targetOfferingId: string) => {
+    if (!targetOfferingId) return;
+    setIsLoadingOffering(true);
+    try {
+      const res = await fetch(`/api/v1/offerings/${targetOfferingId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setOfferingDetails(data);
+      }
+    } catch {}
+    setIsLoadingOffering(false);
+  };
+
   // Load marks and configured assessment components from API
   const loadMarks = async (targetOfferingId: string) => {
     if (!targetOfferingId) return;
@@ -177,17 +193,24 @@ export default function MarksPage() {
   };
 
   useEffect(() => {
+    loadOfferingDetails(offeringId);
     loadMarks(offeringId);
   }, [offeringId]);
 
   const currentCourse = courses.find((c) => c.offering?.id === offeringId) || {
-    course_code: INITIAL_COURSE.course_code,
-    course_name: INITIAL_COURSE.course_name,
-    offering: INITIAL_OFFERING,
-    schemeName: "Autonomous 60/40 Scheme",
+    course_code: offeringDetails?.course?.course_code || INITIAL_COURSE.course_code,
+    course_name: offeringDetails?.course?.course_name || INITIAL_COURSE.course_name,
+    offering: offeringDetails ? { id: offeringId, section: offeringDetails.section, attainment_scheme_id: offeringDetails.scheme?.id } : INITIAL_OFFERING,
+    schemeName: offeringDetails?.scheme?.scheme_name || "Autonomous 60/40 Scheme",
+    cosCount: offeringDetails?.cos_count || 6,
   };
 
-  const schemeName = currentCourse.schemeName || (currentCourse.offering?.attainment_scheme_id?.includes("2") ? "Autonomous 30/20 Scheme" : "Autonomous 60/40 Scheme");
+  // Read-only Accreditation Scheme derived directly from authoritative offering configuration
+  const schemeName = offeringDetails?.scheme?.scheme_name || currentCourse.schemeName || "Autonomous 60/40 Scheme";
+  const cosCount = offeringDetails?.cos_count || currentCourse.cosCount || (schemeName.includes("30") ? 4 : 6);
+  const enrolledStudentsCount = offeringDetails?.students_count ?? marksData.length;
+  const isConfigComplete = offeringDetails ? offeringDetails.is_configuration_complete : components.length > 0;
+  const configurationErrors: string[] = offeringDetails?.configuration_errors || [];
 
   const handleSelectOffering = (newOfferingId: string) => {
     setOfferingId(newOfferingId);
@@ -203,6 +226,8 @@ export default function MarksPage() {
     setFileName("");
     setValidationReport(null);
     setTemplateMismatchError(null);
+    setConfirmOverwrites(false);
+    loadOfferingDetails(newOfferingId);
     loadMarks(newOfferingId);
   };
 
@@ -800,12 +825,12 @@ export default function MarksPage() {
                   {/* Download Template Shortcut */}
                   <button
                     onClick={() => handleDownloadTemplate("xlsx")}
-                    disabled={isDownloadingTemplate}
+                    disabled={isDownloadingTemplate || !isConfigComplete}
                     title="Download dynamic Excel template for this course offering"
-                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-750 transition-colors shadow-xs"
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-750 transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Download className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />
-                    <span>Download Template</span>
+                    <span>Download Excel Template</span>
                   </button>
 
                   <button
@@ -1035,41 +1060,64 @@ export default function MarksPage() {
                     </div>
 
                     <div>
-                      <span className="text-slate-400 block font-medium">Accreditation Scheme</span>
+                      <span className="text-slate-400 block font-medium">Accreditation Scheme (Read-Only)</span>
                       <span className="font-bold text-indigo-700 dark:text-indigo-300">{schemeName}</span>
                       <span className="block text-slate-500 text-[11px]">
-                        {schemeName.includes("30") ? "4 COs • Max cohort: 65" : "6 COs • Max cohort: 81"}
+                        {cosCount} Configured COs • Max cohort: {schemeName.includes("30") ? 65 : 81}
                       </span>
                     </div>
 
                     <div>
                       <span className="text-slate-400 block font-medium">Enrolled Cohort</span>
-                      <span className="font-bold text-slate-800 dark:text-slate-200">{marksData.length} Students</span>
+                      <span className="font-bold text-slate-800 dark:text-slate-200">{enrolledStudentsCount} Students</span>
                       <span className="block text-slate-500 text-[11px]">Section {currentCourse.offering?.section || "A"}</span>
                     </div>
 
                     <div>
-                      <span className="text-slate-400 block font-medium">Assessment Columns</span>
+                      <span className="text-slate-400 block font-medium">Assessment Components</span>
                       <span className="font-bold text-slate-800 dark:text-slate-200">{components.length} Components</span>
-                      <span className="block text-slate-500 text-[11px]">With Max Marks & CO Mapping</span>
+                      <span className="block text-slate-500 text-[11px]">Bound to Configured Max & COs</span>
                     </div>
                   </div>
+
+                  {/* Actionable Error when Assessment Configuration is Incomplete */}
+                  {!isConfigComplete && (
+                    <div className="rounded-2xl border border-amber-300 bg-amber-50 dark:bg-amber-950/40 p-4 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-3 shadow-xs">
+                      <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="space-y-1.5 flex-1">
+                        <p className="font-bold">Assessment Configuration Incomplete for this Offering</p>
+                        <p>
+                          {configurationErrors.length > 0
+                            ? configurationErrors.join(" ")
+                            : "Assessment components, maximum marks, and course outcome mappings must be configured before downloading the marks template."}
+                        </p>
+                        <div className="pt-1">
+                          <Link
+                            href={`/courses/${currentCourse.id || currentCourse.course_code}/setup`}
+                            className="inline-flex items-center gap-1.5 font-bold text-sky-700 dark:text-sky-300 underline hover:no-underline"
+                          >
+                            Open Course Setup to Configure Assessments →
+                          </Link>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Action Buttons */}
                   <div className="flex flex-wrap items-center gap-3 pt-2">
                     <button
                       onClick={() => handleDownloadTemplate("xlsx")}
-                      disabled={isDownloadingTemplate}
-                      className="inline-flex items-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 px-5 py-3 text-xs font-semibold text-white shadow-sm transition-all"
+                      disabled={isDownloadingTemplate || !isConfigComplete}
+                      className="inline-flex items-center gap-2 rounded-xl bg-sky-600 hover:bg-sky-500 px-5 py-3 text-xs font-semibold text-white shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Download className="h-4 w-4" />
-                      {isDownloadingTemplate ? "Generating Excel Template..." : "Download Official Template (.xlsx)"}
+                      {isDownloadingTemplate ? "Generating Excel Template..." : "Download Excel Template"}
                     </button>
 
                     <button
                       onClick={() => handleDownloadTemplate("csv")}
-                      disabled={isDownloadingTemplate}
-                      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-750 transition-colors shadow-xs"
+                      disabled={isDownloadingTemplate || !isConfigComplete}
+                      className="inline-flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-750 transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
                       Download CSV Template
