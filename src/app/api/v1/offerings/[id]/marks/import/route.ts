@@ -220,19 +220,68 @@ export async function POST(
       new_value: any;
     }> = [];
 
-    // Capacity validation
-    if (rows.length > maxCapacity) {
+    // Capacity & Metadata Filtering
+    // Filter out any metadata banners, category headers, or max-marks guidance rows that may be included
+    const studentRows = rows.filter((r) => {
+      if (!Array.isArray(r) || r.length === 0 || !r.some((c) => c !== null && c !== undefined && String(c).trim() !== "")) {
+        return false;
+      }
+      const rawRoll = String(r[rollColIdx] ?? "").trim().toLowerCase();
+      const firstCell = String(r[0] ?? "").trim().toLowerCase();
+      const rowText = r.map((c) => String(c ?? "").trim().toLowerCase()).join(" ");
+
+      if (
+        rawRoll.startsWith("template schema") ||
+        rawRoll.startsWith("outcomex") ||
+        rawRoll.startsWith("course:") ||
+        rawRoll.startsWith("student identifiers") ||
+        rawRoll.startsWith("outcome mapping") ||
+        rawRoll.startsWith("roll no") ||
+        rawRoll.startsWith("max marks") ||
+        rawRoll.startsWith("max:") ||
+        rawRoll.includes("allowed range") ||
+        rawRoll === "-" ||
+        rawRoll === "teacher assessment" ||
+        rawRoll.startsWith("teacher assessment (") ||
+        rawRoll.startsWith("mid_term") ||
+        rawRoll.startsWith("mid term") ||
+        rawRoll.startsWith("end_sem") ||
+        rawRoll.startsWith("end sem")
+      ) {
+        return false;
+      }
+
+      if (
+        firstCell.startsWith("template schema") ||
+        firstCell.startsWith("outcomex") ||
+        firstCell.startsWith("course:") ||
+        firstCell.startsWith("student identifiers") ||
+        firstCell.startsWith("outcome mapping") ||
+        firstCell.startsWith("roll no") ||
+        firstCell.startsWith("max marks") ||
+        firstCell.startsWith("max:") ||
+        rowText.includes("template schema: outcomex") ||
+        rowText.includes("allowed range:") ||
+        rowText.includes("outcome mapping:")
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+
+    if (studentRows.length > maxCapacity) {
       rowErrors.push({
         row: 0,
         roll_no: "COHORT_LIMIT",
-        message: `Import cohort size (${rows.length}) exceeds maximum template capacity of ${maxCapacity} students for ${schemeName}. Please split cohort into sections.`,
+        message: `Import cohort size (${studentRows.length}) exceeds maximum template capacity of ${maxCapacity} students for ${schemeName}. Please split cohort into sections.`,
         severity: "error",
       });
     }
 
-    for (let i = 0; i < rows.length; i++) {
+    for (let i = 0; i < studentRows.length; i++) {
       const rowNum = i + 1;
-      const row = rows[i];
+      const row = studentRows[i];
       const rawRoll = String(row[rollColIdx] ?? "").trim();
 
       // Check empty roll
@@ -498,7 +547,7 @@ export async function POST(
             offering_id: id,
             user_email: authCtx.user.email,
             is_outcomex_template: isOutcomeXTemplate,
-            total_rows_evaluated: rows.length,
+            total_rows_evaluated: studentRows.length,
             valid_students_count: validRecords.length,
             records_saved: savedCount,
             new_marks_count: newMarksCount,
@@ -516,9 +565,9 @@ export async function POST(
       success: !hasCriticalErrors,
       offering_id: id,
       is_outcomex_template: isOutcomeXTemplate,
-      total_rows_evaluated: rows.length,
+      total_rows_evaluated: studentRows.length,
       valid_rows_count: validRecords.length,
-      invalid_rows_count: rows.length - validRecords.length,
+      invalid_rows_count: studentRows.length - validRecords.length,
       has_critical_errors: hasCriticalErrors,
       errors_count: rowErrors.filter((e) => e.severity === "error").length,
       warnings_count: rowErrors.filter((e) => e.severity === "warning").length,

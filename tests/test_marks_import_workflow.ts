@@ -23,6 +23,7 @@ try {
 
 import { generateMarksTemplate, TEMPLATE_SCHEMA_VERSION } from "../src/lib/excel/templateGenerator";
 import { generateExcelReport } from "../src/lib/excel/excelGenerator";
+import { parseExcelRows } from "../src/lib/excel/parseExcelRows";
 import { REFERENCE_STUDENTS } from "../src/lib/data/referenceStudents";
 import { INITIAL_OFFERING, INITIAL_COURSE, INITIAL_SCHEMES, INITIAL_ASSESSMENTS, INITIAL_30_20_ASSESSMENTS } from "../src/lib/data/initialData";
 import { authorizeOfferingAccess, AuthContext } from "../src/lib/auth/authHelper";
@@ -411,6 +412,43 @@ async function runTestSuite() {
   };
   const adminCheck = await authorizeOfferingAccess(adminCtx, TEST_60_40_OFFERING_ID);
   assert(adminCheck.authorized === true, "Department admin granted management access to departmental offering");
+
+  // --------------------------------------------------------------------------
+  // TEST 14: Template Header & Row Extraction Discrimination
+  // --------------------------------------------------------------------------
+  console.log("\n--- Test 14: Template Header & Row Extraction Discrimination ---");
+  const rawRows: string[][] = [];
+  marksSheet60?.eachRow((row) => {
+    const rowVals: string[] = [];
+    const values = row.values as any[];
+    for (let c = 1; c < values.length; c++) {
+      const v = values[c];
+      rowVals.push(v === null || v === undefined ? "" : String(v));
+    }
+    rawRows.push(rowVals);
+  });
+
+  const parsed = parseExcelRows(rawRows);
+  // Header row must be index 5 (Row 6 in 1-based indexing, containing "Roll No *")
+  assert(parsed.headerRowIdx === 5, `Header row index correctly identified as 5 (Row 6) - Got ${parsed.headerRowIdx}`);
+  assert(parsed.headers[0] === "Roll No *", `Header column 0 is 'Roll No *' - Got '${parsed.headers[0]}'`);
+  assert(parsed.headers[1] === "Student Name", `Header column 1 is 'Student Name' - Got '${parsed.headers[1]}'`);
+
+  // Data rows should only be student records (no "Template Schema", no "TEACHER ASSESSMENT", no "Max: 10")
+  const expectedCount = template60_40.studentsCount > 0 ? template60_40.studentsCount : 1;
+  assert(parsed.dataRows.length === expectedCount, `Extracted exactly ${expectedCount} student data rows without banners or metadata - Got ${parsed.dataRows.length}`);
+  const hasBannerRow = parsed.dataRows.some((r) =>
+    r.some((c) =>
+      c.includes("Template Schema") ||
+      c.includes("TEACHER ASSESSMENT") ||
+      c.includes("MAX MARKS") ||
+      c.includes("Max: 10") ||
+      c.includes("Outcome Mapping")
+    )
+  );
+  assert(!hasBannerRow, "Zero metadata/banner/guidance rows in parsed data rows");
+  const expectedFirstRoll = template60_40.studentsCount > 0 ? "102" : "101";
+  assert(parsed.dataRows[0][0] === expectedFirstRoll, `First data row has student roll '${expectedFirstRoll}' - Got '${parsed.dataRows[0][0]}'`);
 
   console.log("\n================================================================================");
   console.log(`ALL TESTS PASSED: ${passedTests} / ${totalTests} (100% SUCCESS)`);

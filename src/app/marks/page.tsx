@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { INITIAL_OFFERING, INITIAL_COURSE, INITIAL_ASSESSMENTS } from "@/lib/data/initialData";
 import { normalizeComponentKey } from "@/lib/utils";
+import { parseExcelRows } from "@/lib/excel/parseExcelRows";
 
 interface DynamicComponent {
   id: string;
@@ -96,6 +97,7 @@ export default function MarksPage() {
   const [templateMetadata, setTemplateMetadata] = useState<any>(null);
   const [templateMismatchError, setTemplateMismatchError] = useState<string | null>(null);
   const [columnMapping, setColumnMapping] = useState<Record<string, number>>({});
+  const [parsedDataRows, setParsedDataRows] = useState<string[][]>([]);
   const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [isCommitting, setIsCommitting] = useState(false);
@@ -468,79 +470,58 @@ export default function MarksPage() {
       setIsOutcomeXTemplate(isRecognizedTemplate);
       setTemplateMetadata(detectedMeta || (detectedOfferingId ? { offering_id: detectedOfferingId } : null));
 
-      // Automated Column Mapping
-      let dataRows: string[][] = [];
+      // Automated Column Mapping & Parsing
+      const { headers, dataRows } = parseExcelRows(rows);
+      setParsedDataRows(dataRows);
       const mapping: Record<string, number> = {};
 
-      if (isRecognizedTemplate) {
-        // Find row containing "Roll No" in the first 8 rows
-        let headerRowIdx = 0;
-        for (let r = 0; r < Math.min(rows.length, 10); r++) {
-          const rStr = rows[r].join(" ").toLowerCase();
-          if (rStr.includes("roll")) {
-            headerRowIdx = r;
-            break;
+      // Map standard columns
+      headers.forEach((h, idx) => {
+        const clean = String(h ?? "").trim();
+        const lower = clean.toLowerCase();
+        if (!lower) return;
+
+        if (
+          lower === "roll no" ||
+          lower === "roll no *" ||
+          lower === "roll no." ||
+          lower === "roll_no" ||
+          lower === "roll" ||
+          lower === "roll number" ||
+          lower === "roll #" ||
+          lower === "roll#" ||
+          (lower.startsWith("roll") && !lower.includes("enrolled") && lower.length <= 15)
+        ) {
+          mapping["roll_no"] = idx;
+        } else if (
+          lower === "student name" ||
+          lower === "name" ||
+          (lower.includes("name") && !lower.includes("course") && !lower.includes("scheme")) ||
+          (lower.includes("student") && !lower.includes("enrolled") && !lower.includes("identifiers"))
+        ) {
+          mapping["student_name"] = idx;
+        } else {
+          const normH = normalizeComponentKey(clean);
+          const matchedComp = components.find(
+            (c) =>
+              c.name.toLowerCase() === lower ||
+              c.key === normH ||
+              lower.includes(c.key) ||
+              lower.includes(c.name.toLowerCase()) ||
+              normH.includes(c.key) ||
+              (c.coCode !== "-" && lower.includes(c.coCode.toLowerCase()) && lower.includes(c.category.slice(0, 3).toLowerCase()))
+          );
+          if (matchedComp) {
+            mapping[matchedComp.key] = idx;
           }
         }
+      });
 
-        const headers = rows[headerRowIdx] || [];
-        dataRows = rows.slice(headerRowIdx + 1).filter((r) => r.some((c) => c !== ""));
+      if (mapping["roll_no"] === undefined && headers.length > 0) mapping["roll_no"] = 0;
+      if (mapping["student_name"] === undefined && headers.length > 1) mapping["student_name"] = 1;
 
-        // If template has max marks in row immediately following headers, filter it
-        if (dataRows[0] && dataRows[0].some((c) => String(c).toLowerCase().includes("max"))) {
-          dataRows = dataRows.slice(1);
-        }
-
-        // Map standard columns
-        headers.forEach((h, idx) => {
-          const lower = h.toLowerCase().trim();
-          if (lower.includes("roll")) mapping["roll_no"] = idx;
-          else if (lower.includes("name") || lower.includes("student")) mapping["student_name"] = idx;
-          else {
-            const matchedComp = components.find(
-              (c) =>
-                c.name.toLowerCase() === lower ||
-                lower.includes(c.key) ||
-                lower.includes(c.name.toLowerCase()) ||
-                (c.coCode !== "-" && lower.includes(c.coCode.toLowerCase()) && lower.includes(c.category.slice(0, 3).toLowerCase()))
-            );
-            if (matchedComp) {
-              mapping[matchedComp.key] = idx;
-            }
-          }
-        });
-
-        // Set mapping and immediately auto-run validation (Skips manual mapping!)
-        setColumnMapping(mapping);
-        runValidation(dataRows, mapping, true, detectedMeta);
-      } else {
-        // External file: Auto-detect mapping and proceed to Review Step
-        const headers = rows[0] || [];
-        dataRows = rows.slice(1);
-
-        headers.forEach((h, idx) => {
-          const lower = h.toLowerCase().trim();
-          if (lower.includes("roll")) mapping["roll_no"] = idx;
-          else if (lower.includes("name") || lower.includes("student")) mapping["student_name"] = idx;
-          else {
-            const matchedComp = components.find(
-              (c) =>
-                lower.includes(c.key) ||
-                lower.includes(c.name.toLowerCase()) ||
-                (c.coCode !== "-" && lower.includes(c.coCode.toLowerCase()))
-            );
-            if (matchedComp) {
-              mapping[matchedComp.key] = idx;
-            }
-          }
-        });
-
-        if (mapping["roll_no"] === undefined && headers.length > 0) mapping["roll_no"] = 0;
-        if (mapping["student_name"] === undefined && headers.length > 1) mapping["student_name"] = 1;
-
-        setColumnMapping(mapping);
-        runValidation(dataRows, mapping, false, null);
-      }
+      setColumnMapping(mapping);
+      runValidation(dataRows, mapping, isRecognizedTemplate, detectedMeta);
     } catch (err: any) {
       alert(`Error reading file: ${err.message}`);
     }
@@ -589,21 +570,9 @@ export default function MarksPage() {
 
     setIsCommitting(true);
     try {
-      // Find data rows
-      let dataRows = fileContent.slice(1);
-      if (isOutcomeXTemplate) {
-        let headerRowIdx = 0;
-        for (let r = 0; r < Math.min(fileContent.length, 10); r++) {
-          if (fileContent[r].join(" ").toLowerCase().includes("roll")) {
-            headerRowIdx = r;
-            break;
-          }
-        }
-        dataRows = fileContent.slice(headerRowIdx + 1).filter((r) => r.some((c) => c !== ""));
-        if (dataRows[0] && dataRows[0].some((c) => String(c).toLowerCase().includes("max"))) {
-          dataRows = dataRows.slice(1);
-        }
-      }
+      // Use previously validated rows or parse from fileContent
+      const dataRows =
+        parsedDataRows.length > 0 ? parsedDataRows : parseExcelRows(fileContent).dataRows;
 
       const res = await fetch(`/api/v1/offerings/${offeringId}/marks/import`, {
         method: "POST",
